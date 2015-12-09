@@ -586,6 +586,15 @@ pglz_compress(const char *source, int32 slen, PGLZ_Header *dest,
 			return false;
 
 		/*
+		 * If we've emitted more than first_success_by bytes without finding
+		 * anything compressible at all, fail.	This lets us fall out
+		 * reasonably quickly when looking at incompressible input (such as
+		 * pre-compressed data).
+		 */
+		if (!found_match && bp - bstart >= strategy->first_success_by)
+			return false;
+
+		/*
 		 * Try to find a match in the history
 		 */
 		if (pglz_find_match(hist_start, dp, dend, &match_len,

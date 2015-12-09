@@ -43,7 +43,7 @@
  *
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/utils/error/elog.c,v 1.178.2.4 2007/07/21 22:12:11 tgl Exp $
+ *	  $PostgreSQL: pgsql/src/backend/utils/error/elog.c,v 1.180 2007/01/20 14:45:35 momjian Exp $
  *
  *-------------------------------------------------------------------------
  */
@@ -206,6 +206,7 @@ static bool is_log_level_output(int elevel, int log_min_level);
 static void write_pipe_chunks(char *data, int len);
 static void elog_debug_linger(ErrorData *edata);
 static void setup_formatted_start_time(void);
+static int is_log_level_output(int elevel, int log_min_level);
 
 
 /* verify string is correctly encoded, and escape it if invalid  */
@@ -302,7 +303,7 @@ errstart(int elevel, const char *filename, int lineno,
 		 const char *funcname, const char *domain)
 {
 	ErrorData  *edata;
-	bool		output_to_server = false;
+	bool		output_to_server;
 	bool		output_to_client = false;
 	int			i;
 
@@ -397,10 +398,8 @@ errstart(int elevel, const char *filename, int lineno,
 	if (IsPostmasterEnvironment)
 		output_to_server = is_log_level_output(elevel, log_min_messages);
 	else
-	{
 		/* In bootstrap/standalone case, do not sort LOG out-of-order */
 		output_to_server = (elevel >= log_min_messages);
-	}
 
 	/* Determine whether message is enabled for client output */
 	if (whereToSendOutput == DestRemote && elevel != COMMERROR)
@@ -4017,9 +4016,12 @@ write_stderr(const char *fmt,...)
  * whether a message should go to the postmaster log, whereas a simple >=
  * test is correct for testing whether the message should go to the client.
  */
-static bool
-is_log_level_output(int elevel, int log_min_level)
+static int is_log_level_output(int elevel, int log_min_level)
 {
+	/*
+	 *	Complicated because LOG is sorted out-of-order here, between
+	 *	ERROR and FATAL.
+	 */
 	if (elevel == LOG || elevel == COMMERROR)
 	{
 		if (log_min_level == LOG || log_min_level <= ERROR)

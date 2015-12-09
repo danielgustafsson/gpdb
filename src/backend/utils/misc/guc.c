@@ -11,7 +11,7 @@
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/utils/misc/guc.c,v 1.368 2007/01/16 18:26:02 alvherre Exp $
+ *	  $PostgreSQL: pgsql/src/backend/utils/misc/guc.c,v 1.369 2007/01/19 16:58:46 petere Exp $
  *
  *--------------------------------------------------------------------
  */
@@ -2466,6 +2466,24 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&external_pid_file,
 		NULL, assign_canonical_path, NULL
+	},
+
+	{
+		{"xmlbinary", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets how binary values are to be encoded in XML."),
+			gettext_noop("Valid values are BASE64 and HEX.")
+		},
+		&xmlbinary_string,
+		"base64", assign_xmlbinary, NULL
+	},
+
+	{
+		{"xmlbinary", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets how binary values are to be encoded in XML."),
+			gettext_noop("Valid values are BASE64 and HEX.")
+		},
+		&xmlbinary_string,
+		"base64", assign_xmlbinary, NULL
 	},
 
 	/* End-of-list marker */

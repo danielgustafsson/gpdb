@@ -8,6 +8,39 @@
 #include "postgres_fe.h"
 #include "large_obj.h"
 
+static void
+print_lo_result(const char *fmt,...)
+__attribute__((format(printf, 1, 2)));
+
+static void
+print_lo_result(const char *fmt,...)
+{
+	va_list		ap;
+
+	if (!pset.quiet)
+	{
+		if (pset.popt.topt.format == PRINT_HTML)
+			fputs("<p>", pset.queryFout);
+
+		va_start(ap, fmt);
+		vfprintf(pset.queryFout, fmt, ap);
+		va_end(ap);
+
+		if (pset.popt.topt.format == PRINT_HTML)
+			fputs("</p>\n", pset.queryFout);
+		else
+			fputs("\n", pset.queryFout);
+	}
+
+	if (pset.logfile)
+	{
+		va_start(ap, fmt);
+		vfprintf(pset.logfile, fmt, ap);
+		va_end(ap);
+		fputs("\n", pset.logfile);
+	}
+}
+
 
 #include "settings.h"
 #include "common.h"
