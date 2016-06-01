@@ -9,7 +9,7 @@
  *
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/optimizer/util/pathnode.c,v 1.138 2007/02/06 02:59:12 tgl Exp $
+ *	  $PostgreSQL: pgsql/src/backend/optimizer/util/pathnode.c,v 1.142.2.1 2008/04/21 20:54:24 tgl Exp $
  *
  *-------------------------------------------------------------------------
  */
@@ -514,7 +514,13 @@ cdb_set_cheapest_dedup(PlannerInfo *root, RelOptInfo *rel)
      * CDB TODO: Avoid sorting when the subpath is ordered on the
      * sub_targetlist columns.
      */
-    if (dedup->join_unique_ininfo)
+	/*
+	 * GPDB_MERGE83_FIXME: The check for sub_targetlist is clearly bogus since
+	 * it's originally Asserted inside. Avoiding this clears a coredump without
+	 * deteriorated plans observed but it must be revisited before release of
+	 * course.
+	 */
+    if (dedup->join_unique_ininfo && dedup->join_unique_ininfo->sub_targetlist)
     {
     	Assert(dedup->join_unique_ininfo->sub_targetlist);
     	/* Top off the subpath with DISTINCT ON the result columns. */
@@ -1712,7 +1718,8 @@ create_unique_path(PlannerInfo *root,
 	cost_sort(&sort_path, root, NIL,
 			  subpath->total_cost,
 			  subpath_rows,
-			  rel->width);
+			  rel->width,
+			  -1.0);
 
 	/*
 	 * Charge one cpu_operator_cost per comparison per input tuple. We assume
@@ -1838,7 +1845,7 @@ create_unique_exprlist_path(PlannerInfo *root, Path *subpath,
 	 */
 	if (rel->rtekind == RTE_SUBQUERY)
 	{
-		RangeTblEntry *rte = rt_fetch(rel->relid, root->parse->rtable);
+		RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 		List	   *sub_tlist_colnos;
 
 		sub_tlist_colnos = translate_sub_tlist(distinct_on_exprs, rel->relid);
@@ -2037,7 +2044,7 @@ make_unique_path(Path *subpath)
 /*
  * translate_sub_tlist - get subquery column numbers represented by tlist
  *
- * The given targetlist should contain only Vars referencing the given relid.
+ * The given targetlist usually contains only Vars referencing the given relid.
  * Extract their varattnos (ie, the column numbers of the subquery) and return
  * as an integer List.
  *
@@ -2070,7 +2077,7 @@ translate_sub_tlist(List *tlist, int relid)
  *
  * colnos is an integer list of output column numbers (resno's).  We are
  * interested in whether rows consisting of just these columns are certain
- * to be distinct.  "Distinctness" is defined according to whether the
+ * to be distinct.	"Distinctness" is defined according to whether the
  * corresponding upper-level equality operators listed in opids would think
  * the values are distinct.  (Note: the opids entries could be cross-type
  * operators, and thus not exactly the equality operators that the subquery
@@ -2087,8 +2094,8 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 
 	/*
 	 * DISTINCT (including DISTINCT ON) guarantees uniqueness if all the
-	 * columns in the DISTINCT clause appear in colnos and operator
-	 * semantics match.
+	 * columns in the DISTINCT clause appear in colnos and operator semantics
+	 * match.
 	 */
 	if (query->distinctClause)
 	{
@@ -2148,9 +2155,8 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 	 *
 	 * XXX this code knows that prepunion.c will adopt the default ordering
 	 * operator for each column datatype as the sortop.  It'd probably be
-	 * better if these operators were chosen at parse time and stored into
-	 * the parsetree, instead of leaving bits of the planner to decide
-	 * semantics.
+	 * better if these operators were chosen at parse time and stored into the
+	 * parsetree, instead of leaving bits of the planner to decide semantics.
 	 */
 	if (query->setOperations)
 	{
@@ -2172,7 +2178,7 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 				opid = distinct_col_search(tle->resno, colnos, opids);
 				if (!OidIsValid(opid) ||
 					!ops_in_same_btree_opfamily(opid,
-												ordering_oper_opid(exprType((Node *) tle->expr))))
+						   ordering_oper_opid(exprType((Node *) tle->expr))))
 					break;		/* exit early if no match */
 			}
 			if (l == NULL)		/* had matches for all? */
@@ -2192,7 +2198,7 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
  * distinct_col_search - subroutine for query_is_distinct_for
  *
  * If colno is in colnos, return the corresponding element of opids,
- * else return InvalidOid.  (We expect colnos does not contain duplicates,
+ * else return InvalidOid.	(We expect colnos does not contain duplicates,
  * so the result is well-defined.)
  */
 static Oid

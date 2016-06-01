@@ -334,12 +334,12 @@ ExecInitTableFunction(TableFunctionScan *node, EState *estate, int eflags)
 	 * the planner didn't try to perform constant folding or other inlining
 	 * on a function invoked as a table function.
 	 */
-	if (!rte->funcexpr || !IsA(rte->funcexpr, FuncExpr))
+	if (!node->funcexpr || !IsA(node->funcexpr, FuncExpr))
 	{
 		/* should not be possible */
 		elog(ERROR, "table function expression is not a function expression");
 	}
-	func = (FuncExpr *) rte->funcexpr;
+	func = (FuncExpr *) node->funcexpr;
 	functypclass = get_expr_result_type((Node*) func, &funcrettype, &resultdesc);
 	
 	switch (functypclass)
@@ -356,9 +356,9 @@ ExecInitTableFunction(TableFunctionScan *node, EState *estate, int eflags)
 		case TYPEFUNC_RECORD:
 		{
 			/* Record data type: Construct tuple desc based on rangeTable */
-			resultdesc = BuildDescFromLists(rte->eref->colnames,
-											rte->funccoltypes,
-											rte->funccoltypmods);
+			resultdesc = BuildDescFromLists(node->funccolnames,
+											node->funccoltypes,
+											node->funccoltypmods);
 			scanstate->is_rowtype = true;
 			break;
 		}
@@ -366,7 +366,7 @@ ExecInitTableFunction(TableFunctionScan *node, EState *estate, int eflags)
 		case TYPEFUNC_SCALAR:
 		{
 			/* Scalar data type: Construct a tuple descriptor manually */
-			char	   *attname = strVal(linitial(rte->eref->colnames));
+			char	   *attname = strVal(linitial(node->funccolnames));
 
 			resultdesc = CreateTemplateTupleDesc(1, false);
 			TupleDescInitEntry(resultdesc,
@@ -397,7 +397,7 @@ ExecInitTableFunction(TableFunctionScan *node, EState *estate, int eflags)
 
 	/* Other node-specific setup */
 	scanstate->fcache = (FuncExprState*)
-		ExecInitExpr((Expr *) rte->funcexpr, (PlanState *) scanstate);
+		ExecInitExpr((Expr *) node->funcexpr, (PlanState *) scanstate);
 	Assert(scanstate->fcache && IsA(scanstate->fcache, FuncExprState));
 
 	scanstate->rsinfo.type		   = T_ReturnSetInfo;

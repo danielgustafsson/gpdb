@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/parser/parse_agg.c,v 1.77 2007/02/01 19:10:27 momjian Exp $
+ *	  $PostgreSQL: pgsql/src/backend/parser/parse_agg.c,v 1.79 2008/01/01 19:45:50 momjian Exp $
  *
  *-------------------------------------------------------------------------
  */
@@ -83,11 +83,15 @@ check_call(ParseState *pstate, Node *call)
 	 */
 	if (min_varlevel == 0 && is_agg)
 	{
+		Aggref *agg = (Aggref *) call;
+
 		if (checkExprHasAggs((Node *)((Aggref *)call)->args))
 			ereport(ERROR,
 					(errcode(ERRCODE_GROUPING_ERROR),
-					 errmsg("aggregate function calls cannot be nested")));
-		
+					 errmsg("aggregate function calls cannot be nested"),
+					 parser_errposition(pstate,
+							   locate_agg_of_level((Node *) agg->args, 0))));
+
 		if (checkExprHasWindFuncs((Node *)((Aggref *)call)->args))
 		{
 			ereport(ERROR,
@@ -498,7 +502,7 @@ check_ungrouped_columns_walker(Node *node,
  *
  * agg_input_types, agg_state_type, agg_result_type identify the input,
  * transition, and result types of the aggregate.  These should all be
- * resolved to actual types (ie, none should ever be ANYARRAY or ANYELEMENT).
+ * resolved to actual types (ie, none should ever be ANYELEMENT etc).
  *
  * transfn_oid and finalfn_oid identify the funcs to be called; the latter
  * may be InvalidOid.

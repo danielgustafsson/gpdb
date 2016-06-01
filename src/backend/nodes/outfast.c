@@ -293,8 +293,6 @@ _outPlanInfo(StringInfo str, Plan *node)
 	WRITE_BITMAPSET_FIELD(extParam);
 	WRITE_BITMAPSET_FIELD(allParam);
 
-	WRITE_INT_FIELD(nParamExec);
-
 	if (print_variable_fields)
 	{
 		WRITE_NODE_FIELD(flow);
@@ -346,16 +344,17 @@ _outPlannedStmt(StringInfo str, PlannedStmt *node)
 	WRITE_NODE_FIELD(numSelectorsPerScanId);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(relationOids);
-	WRITE_NODE_FIELD(invalItems);
-	WRITE_INT_FIELD(nCrossLevelParams);
+	/*
+	 * Don't serialize invalItems. The TIDs of the invalidated items wouldn't
+	 * make sense in segments.
+	 */
+	WRITE_INT_FIELD(nParamExec);
 	WRITE_INT_FIELD(nMotionNodes);
 	WRITE_INT_FIELD(nInitPlans);
 
 	/* Don't serialize policy */
-	WRITE_NODE_FIELD(sliceTable);
 
 	WRITE_UINT64_FIELD(query_mem);
-	WRITE_NODE_FIELD(transientTypeRecords);
 }
 
 static void
@@ -617,9 +616,6 @@ _outCurrentOfExpr(StringInfo str, CurrentOfExpr *node)
 	WRITE_STRING_FIELD(cursor_name);
 	WRITE_UINT_FIELD(cvarno);
 	WRITE_OID_FIELD(target_relid);
-	WRITE_INT_FIELD(gp_segment_id);
-	WRITE_BINARY_FIELD(ctid, sizeof(ItemPointerData));
-	WRITE_OID_FIELD(tableoid);
 }
 
 static void
@@ -859,7 +855,6 @@ _outColumnDef(StringInfo str, ColumnDef *node)
 	WRITE_INT_FIELD(attnum);
 	WRITE_OID_FIELD(default_oid);
 	WRITE_NODE_FIELD(raw_default);
-	WRITE_BOOL_FIELD(default_is_null);
 	WRITE_STRING_FIELD(cooked_default);
 	WRITE_NODE_FIELD(constraints);
 	WRITE_NODE_FIELD(encoding);
@@ -905,6 +900,7 @@ _outQuery(StringInfo str, Query *node)
 	WRITE_BOOL_FIELD(hasAggs);
 	WRITE_BOOL_FIELD(hasWindFuncs);
 	WRITE_BOOL_FIELD(hasSubLinks);
+	WRITE_BOOL_FIELD(hasDynamicFunctions);
 	WRITE_NODE_FIELD(rtable);
 	WRITE_NODE_FIELD(jointree);
 	WRITE_NODE_FIELD(targetList);
@@ -922,10 +918,6 @@ _outQuery(StringInfo str, Query *node)
 	WRITE_NODE_FIELD(limitCount);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(setOperations);
-	WRITE_NODE_FIELD(resultRelations);
-	WRITE_NODE_FIELD(result_partitions);
-	WRITE_NODE_FIELD(result_aosegnos);
-	WRITE_NODE_FIELD(returningLists);
 	/* Don't serialize policy */
 }
 
@@ -987,6 +979,7 @@ _outRangeTblEntry(StringInfo str, RangeTblEntry *node)
 	WRITE_OID_FIELD(checkAsUser);
 
 	WRITE_BOOL_FIELD(forceDistRandom);
+	WRITE_NODE_FIELD(pseudocols);
 }
 
 static void
@@ -1127,6 +1120,28 @@ _outConstraint(StringInfo str, Constraint *node)
 }
 
 static void
+_outCreateFileSpaceStmt(StringInfo str, CreateFileSpaceStmt *node)
+{
+	WRITE_NODE_TYPE("CREATEFILESPACESTMT");
+
+	WRITE_STRING_FIELD(filespacename);
+	WRITE_STRING_FIELD(owner);
+	WRITE_NODE_FIELD(locations);
+	WRITE_OID_FIELD(fsoid);
+}
+
+static void
+_outFileSpaceEntry(StringInfo str, FileSpaceEntry *node)
+{
+	WRITE_NODE_TYPE("FILESPACEENTRY");
+
+	WRITE_INT_FIELD(dbid);
+	WRITE_INT_FIELD(contentid);
+	WRITE_STRING_FIELD(location);
+	WRITE_STRING_FIELD(hostname);
+}
+
+static void
 _outCreateQueueStmt(StringInfo str, CreateQueueStmt *node)
 {
 	WRITE_NODE_TYPE("CREATEQUEUESTMT");
@@ -1198,6 +1213,9 @@ _outNode(StringInfo str, void *obj)
 		{
 			case T_PlannedStmt:
 				_outPlannedStmt(str,obj);
+				break;
+			case T_QueryDispatchDesc:
+				_outQueryDispatchDesc(str,obj);
 				break;
 			case T_Plan:
 				_outPlan(str, obj);
@@ -1342,6 +1360,9 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_IntoClause:
 				_outIntoClause(str, obj);
+				break;
+			case T_TableOidInfo:
+				_outTableOidInfo(str, obj);
 				break;
 			case T_Var:
 				_outVar(str, obj);
@@ -1648,6 +1669,9 @@ _outNode(StringInfo str, void *obj)
 			case T_CompositeTypeStmt:
 				_outCompositeTypeStmt(str,obj);
 				break;
+			case T_CreateEnumStmt:
+				_outCreateEnumStmt(str,obj);
+				break;
 			case T_CreateCastStmt:
 				_outCreateCastStmt(str,obj);
 				break;
@@ -1781,11 +1805,26 @@ _outNode(StringInfo str, void *obj)
 			case T_CopyStmt:
 				_outCopyStmt(str, obj);
 				break;
+			case T_SelectStmt:
+				_outSelectStmt(str, obj);
+				break;
+			case T_InsertStmt:
+				_outInsertStmt(str, obj);
+				break;
+			case T_DeleteStmt:
+				_outDeleteStmt(str, obj);
+				break;
+			case T_UpdateStmt:
+				_outUpdateStmt(str, obj);
+				break;
 			case T_ColumnDef:
 				_outColumnDef(str, obj);
 				break;
 			case T_TypeName:
 				_outTypeName(str, obj);
+				break;
+			case T_SortBy:
+				_outSortBy(str, obj);
 				break;
 			case T_TypeCast:
 				_outTypeCast(str, obj);
@@ -1908,8 +1947,11 @@ _outNode(StringInfo str, void *obj)
 			case T_SliceTable:
 				_outSliceTable(str, obj);
 				break;
-			case T_VariableResetStmt:
-				_outVariableResetStmt(str, obj);
+			case T_CursorPosInfo:
+				_outCursorPosInfo(str, obj);
+				break;
+			case T_VariableSetStmt:
+				_outVariableSetStmt(str, obj);
 				break;
 
 			case T_DMLActionExpr:

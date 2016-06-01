@@ -9,7 +9,7 @@
  *
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/parser/parse_clause.c,v 1.164 2007/02/01 19:10:27 momjian Exp $
+ *	  $PostgreSQL: pgsql/src/backend/parser/parse_clause.c,v 1.168 2008/01/01 19:45:50 momjian Exp $
  *
  *-------------------------------------------------------------------------
  */
@@ -30,6 +30,7 @@
 #include "catalog/pg_window.h"
 #include "commands/defrem.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/print.h" /* XXX: remove after debugging !! */
 #include "optimizer/clauses.h"
 #include "optimizer/tlist.h"
@@ -228,7 +229,8 @@ transformWindowFrameEdge(ParseState *pstate, WindowFrameEdge *e,
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						 errmsg("only one ORDER BY column may be specified when"
-								" RANGE is used in a window specification")));
+								" RANGE is used in a window specification"),
+						 parser_errposition(pstate, spec->location)));
 
 			/* e->val should already be transformed */
 			typmod = exprTypmod(e->val);
@@ -527,7 +529,8 @@ transformWindowClause(ParseState *pstate, Query *qry)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 						 errmsg("window \"%s\" cannot reference itself",
-								ws->name)));
+								ws->name),
+						 parser_errposition(pstate, ws->location)));
 
 			foreach(tmp, winout)
 			{
@@ -563,14 +566,14 @@ transformWindowClause(ParseState *pstate, Query *qry)
 					if (ws->partition != NIL)
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
-								 errmsg("PARTITION BY not allowed when "
-										"an existing window name is specified")));
+								 errmsg("PARTITION BY not allowed when an existing window name is specified"),
+								 parser_errposition(pstate, ws->location)));
 
 					if (ws->order != NIL && ws2->order != NIL)
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
-								 errmsg("conflicting ORDER BY clauses in window "
-										"specification")));
+								 errmsg("conflicting ORDER BY clauses in window specification"),
+								 parser_errposition(pstate, ws->location)));
 
 					/*
 					 * We only want to disallow the specification of a
@@ -741,10 +744,13 @@ transformWindowClause(ParseState *pstate, Query *qry)
 				nf->lead = e;
 			}
 
+			ParseCallbackState pcbstate;
+			setup_parser_errposition_callback(&pcbstate, pstate, newspec->location);
 			transformWindowFrameEdge(pstate, nf->trail, newspec, qry,
 									 nf->is_rows);
 			transformWindowFrameEdge(pstate, nf->lead, newspec, qry,
 									 nf->is_rows);
+			cancel_parser_errposition_callback(&pcbstate);
 			newspec->frame = nf;
 		}
 
@@ -798,6 +804,7 @@ setTargetTable(ParseState *pstate, RangeVar *relation,
 {
 	RangeTblEntry *rte;
 	int			rtindex;
+	ParseCallbackState pcbstate;
 
 	/* Close old target; this could only happen for multi-action rules */
 	if (pstate->p_target_relation != NULL)
@@ -807,12 +814,13 @@ setTargetTable(ParseState *pstate, RangeVar *relation,
 	 * Open target rel and grab suitable lock (which we will hold till end of
 	 * transaction).
 	 *
-	 * analyze.c will eventually do the corresponding heap_close(), but *not*
-	 * release the lock.
+	 * free_parsestate() will eventually do the corresponding heap_close(),
+	 * but *not* release the lock.
      *
 	 * CDB: Acquire ExclusiveLock if it is a distributed relation and we are
 	 * doing UPDATE or DELETE activity
 	 */
+	setup_parser_errposition_callback(&pcbstate, pstate, relation->location);
 	if (pstate->p_is_insert && !pstate->p_is_update)
 	{
 		pstate->p_target_relation = heap_openrv(relation, RowExclusiveLock);
@@ -823,6 +831,7 @@ setTargetTable(ParseState *pstate, RangeVar *relation,
 													  RowExclusiveLock, 
 													  false, NULL);
 	}
+	cancel_parser_errposition_callback(&pcbstate);
 	
 	/*
 	 * Now build an RTE.
@@ -921,7 +930,7 @@ setTargetTable(ParseState *pstate, RangeVar *relation,
  * Simplify InhOption (yes/no/default) into boolean yes/no.
  *
  * The reason we do things this way is that we don't want to examine the
- * SQL_inheritance option flag until parse_analyze is run.	Otherwise,
+ * SQL_inheritance option flag until parse_analyze() is run.	Otherwise,
  * we'd do the wrong thing with query strings that intermix SET commands
  * with queries.
  */
@@ -1145,7 +1154,6 @@ transformTableEntry(ParseState *pstate, RangeVar *r)
 static RangeTblEntry *
 transformRangeSubselect(ParseState *pstate, RangeSubselect *r)
 {
-	List	   *parsetrees;
 	Query	   *query;
 	RangeTblEntry *rte;
 
@@ -1162,25 +1170,21 @@ transformRangeSubselect(ParseState *pstate, RangeSubselect *r)
 	/*
 	 * Analyze and transform the subquery.
 	 */
-	parsetrees = parse_sub_analyze(r->subquery, pstate);
+	query = parse_sub_analyze(r->subquery, pstate);
 
 	/*
-	 * Check that we got something reasonable.	Most of these conditions are
-	 * probably impossible given restrictions of the grammar, but check 'em
-	 * anyway.
+	 * Check that we got something reasonable.	Many of these conditions are
+	 * impossible given restrictions of the grammar, but check 'em anyway.
 	 */
-	if (list_length(parsetrees) != 1)
-		elog(ERROR, "unexpected parse analysis result for subquery in FROM");
-	query = (Query *) linitial(parsetrees);
-	if (query == NULL || !IsA(query, Query))
-		elog(ERROR, "unexpected parse analysis result for subquery in FROM");
-
-	if (query->commandType != CMD_SELECT)
+	if (query->commandType != CMD_SELECT ||
+		query->utilityStmt != NULL)
 		elog(ERROR, "expected SELECT query from subquery in FROM");
 	if (query->intoClause != NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("subquery in FROM cannot have SELECT INTO")));
+				 errmsg("subquery in FROM cannot have SELECT INTO"),
+				 parser_errposition(pstate,
+								 exprLocation((Node *) query->intoClause))));
 
 	/*
 	 * The subquery cannot make use of any variables from FROM items created
@@ -1200,7 +1204,9 @@ transformRangeSubselect(ParseState *pstate, RangeSubselect *r)
 		if (contain_vars_of_level((Node *) query, 1))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-					 errmsg("subquery in FROM cannot refer to other relations of same query level")));
+					 errmsg("subquery in FROM cannot refer to other relations of same query level"),
+					 parser_errposition(pstate,
+								   locate_var_of_level((Node *) query, 1))));
 	}
 
 	/*
@@ -1306,7 +1312,9 @@ transformRangeFunction(ParseState *pstate, RangeFunction *r)
 		if (contain_vars_of_level(funcexpr, 0))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-					 errmsg("function expression in FROM cannot refer to other relations of same query level")));
+					 errmsg("function expression in FROM cannot refer to other relations of same query level"),
+					 parser_errposition(pstate,
+										locate_var_of_level(funcexpr, 0))));
 	}
 
 	/*
@@ -1318,7 +1326,9 @@ transformRangeFunction(ParseState *pstate, RangeFunction *r)
 		if (checkExprHasAggs(funcexpr))
 			ereport(ERROR,
 					(errcode(ERRCODE_GROUPING_ERROR),
-					 errmsg("cannot use aggregate function in function expression in FROM")));
+					 errmsg("cannot use aggregate function in function expression in FROM"),
+				 parser_errposition(pstate,
+									locate_agg_of_level(funcexpr, 0))));
 	}
 
 	/*
@@ -1933,7 +1943,9 @@ transformLimitClause(ParseState *pstate, Node *clause,
 				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 		/* translator: %s is name of a SQL construct, eg LIMIT */
 				 errmsg("argument of %s must not contain variables",
-						constructName)));
+						constructName),
+				 parser_errposition(pstate,
+									locate_var_of_level(qual, 0))));
 	}
 	if (checkExprHasAggs(qual))
 	{
@@ -1941,7 +1953,9 @@ transformLimitClause(ParseState *pstate, Node *clause,
 				(errcode(ERRCODE_GROUPING_ERROR),
 		/* translator: %s is name of a SQL construct, eg LIMIT */
 				 errmsg("argument of %s must not contain aggregates",
-						constructName)));
+						constructName),
+				 parser_errposition(pstate,
+									locate_agg_of_level(qual, 0))));
 	}
 	if (contain_subplans(qual))
 	{
@@ -2193,6 +2207,7 @@ findTargetlistEntrySQL92(ParseState *pstate, Node *node, List **tlist,
 	if (IsA(node, A_Const))
 	{
 		Value	   *val = &((A_Const *) node)->val;
+		int			location = ((A_Const *) node)->location;
 		int			targetlist_pos = 0;
 		int			target_pos;
 
@@ -2217,7 +2232,8 @@ findTargetlistEntrySQL92(ParseState *pstate, Node *node, List **tlist,
 				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 		/* translator: %s is name of a SQL construct, eg ORDER BY */
 				 errmsg("%s position %d is not in select list",
-						clauseText[clause], target_pos)));
+						clauseText[clause], target_pos),
+				 parser_errposition(pstate, location)));
 	}
 
 
@@ -2776,10 +2792,7 @@ transformSortClause(ParseState *pstate,
 
 		sortlist = addTargetToSortList(pstate, tle,
 									   sortlist, *targetlist,
-									   sortby->sortby_dir,
-									   sortby->sortby_nulls,
-									   sortby->useOp,
-									   resolveUnknown);
+									   sortby, resolveUnknown);
 	}
 
 	return sortlist;
@@ -2813,6 +2826,13 @@ transformDistinctToGroupBy(ParseState *pstate, List **targetlist,
 		 * append remaining group clauses to the end of group clause list
 		 */
 		ListCell *lc = NULL;
+		SortBy sortby;
+
+		sortby.sortby_dir = SORTBY_DEFAULT;
+		sortby.sortby_nulls = SORTBY_NULLS_DEFAULT;
+		sortby.useOp = NIL;
+		sortby.location = -1;
+
 		foreach(lc, group_tlist_remainder)
 		{
 			TargetEntry *tle = (TargetEntry *) lfirst(lc);
@@ -2820,9 +2840,7 @@ transformDistinctToGroupBy(ParseState *pstate, List **targetlist,
 			{
 				group_clause_list = addTargetToSortList(pstate, tle,
 														group_clause_list, *targetlist,
-														SORTBY_DEFAULT,
-														SORTBY_NULLS_DEFAULT,
-														NIL, true);
+														&sortby, true);
 			}
 		}
 
@@ -2938,6 +2956,12 @@ transformDistinctClause(ParseState *pstate, List *distinctlist,
 		 * trouble than it's worth.
 		 */
 		ListCell   *nextsortlist = list_head(*sortClause);
+		SortBy sortby;
+
+		sortby.sortby_dir = SORTBY_DEFAULT;
+		sortby.sortby_nulls = SORTBY_NULLS_DEFAULT;
+		sortby.useOp = NIL;
+		sortby.location = -1;
 
 		foreach(dlitem, distinctlist)
 		{
@@ -2953,7 +2977,8 @@ transformDistinctClause(ParseState *pstate, List *distinctlist,
 				if (tle->ressortgroupref != scl->tleSortGroupRef)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-							 errmsg("SELECT DISTINCT ON expressions must match initial ORDER BY expressions")));
+							 errmsg("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
+							 parser_errposition(pstate, exprLocation((Node *) lfirst(dlitem)))));
 				result = lappend(result, copyObject(scl));
 				nextsortlist = lnext(nextsortlist);
 			}
@@ -2961,9 +2986,7 @@ transformDistinctClause(ParseState *pstate, List *distinctlist,
 			{
 				*sortClause = addTargetToSortList(pstate, tle,
 												  *sortClause, *targetlist,
-												  SORTBY_DEFAULT,
-												  SORTBY_NULLS_DEFAULT,
-												  NIL, true);
+												  &sortby, true);
 
 				/*
 				 * Probably, the tle should always have been added at the end
@@ -3048,17 +3071,24 @@ addAllTargetsToSortList(ParseState *pstate, List *sortlist,
 						List *targetlist, bool resolveUnknown)
 {
 	ListCell   *l;
+	SortBy		sortby;
+
+	sortby.sortby_dir = SORTBY_DEFAULT;
+	sortby.sortby_nulls = SORTBY_NULLS_DEFAULT;
+	sortby.useOp = NIL;
+	sortby.location = -1;
 
 	foreach(l, targetlist)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(l);
 
 		if (!tle->resjunk)
+		{
+			sortby.node = (Node *) tle->expr;
 			sortlist = addTargetToSortList(pstate, tle,
 										   sortlist, targetlist,
-										   SORTBY_DEFAULT,
-										   SORTBY_NULLS_DEFAULT,
-										   NIL, resolveUnknown);
+										   &sortby, resolveUnknown);
+		}
 	}
 	return sortlist;
 }
@@ -3079,13 +3109,14 @@ addAllTargetsToSortList(ParseState *pstate, List *sortlist,
 List *
 addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 					List *sortlist, List *targetlist,
-					SortByDir sortby_dir, SortByNulls sortby_nulls,
-					List *sortby_opname, bool resolveUnknown)
+					SortBy *sortby, bool resolveUnknown)
 {
 	Oid			restype = exprType((Node *) tle->expr);
 	Oid			sortop;
 	Oid			cmpfunc;
 	bool		reverse;
+	int			location;
+	ParseCallbackState pcbstate;
 
 	/* if tlist item is an UNKNOWN literal, change it to TEXT */
 	if (restype == UNKNOWNOID && resolveUnknown)
@@ -3094,12 +3125,25 @@ addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 										 restype, TEXTOID, -1,
 										 COERCION_IMPLICIT,
 										 COERCE_IMPLICIT_CAST,
-										 -1);
+										 exprLocation((Node *) tle->expr));
 		restype = TEXTOID;
 	}
 
+	/*
+	 * Rather than clutter the API of get_sort_group_operators and the other
+	 * functions we're about to use, make use of error context callback to
+	 * mark any error reports with a parse position.  We point to the operator
+	 * location if present, else to the expression being sorted.  (NB: use the
+	 * original untransformed expression here; the TLE entry might well point
+	 * at a duplicate expression in the regular SELECT list.)
+	 */
+	location = sortby->location;
+	if (location < 0)
+		location = exprLocation(sortby->node);
+	setup_parser_errposition_callback(&pcbstate, pstate, location);
+
 	/* determine the sortop */
-	switch (sortby_dir)
+	switch (sortby->sortby_dir)
 	{
 		case SORTBY_DEFAULT:
 		case SORTBY_ASC:
@@ -3111,29 +3155,33 @@ addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 			reverse = true;
 			break;
 		case SORTBY_USING:
-			Assert(sortby_opname != NIL);
-			sortop = compatible_oper_opid(sortby_opname,
+			Assert(sortby->useOp != NIL);
+			sortop = compatible_oper_opid(sortby->useOp,
 										  restype,
 										  restype,
 										  false);
+
 			/*
-			 * Verify it's a valid ordering operator, and determine
-			 * whether to consider it like ASC or DESC.
+			 * Verify it's a valid ordering operator, and determine whether to
+			 * consider it like ASC or DESC.
 			 */
 			if (!get_compare_function_for_ordering_op(sortop,
 													  &cmpfunc, &reverse))
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("operator %s is not a valid ordering operator",
-								strVal(llast(sortby_opname))),
+					   errmsg("operator %s is not a valid ordering operator",
+							  strVal(llast(sortby->useOp))),
+						 parser_errposition(pstate, sortby->location),
 						 errhint("Ordering operators must be \"<\" or \">\" members of btree operator families.")));
 			break;
 		default:
-			elog(ERROR, "unrecognized sortby_dir: %d", sortby_dir);
-			sortop = InvalidOid; /* keep compiler quiet */
+			elog(ERROR, "unrecognized sortby_dir: %d", sortby->sortby_dir);
+			sortop = InvalidOid;	/* keep compiler quiet */
 			reverse = false;
 			break;
 	}
+
+	cancel_parser_errposition_callback(&pcbstate);
 
 	/* avoid making duplicate sortlist entries */
 	if (!targetIsInSortGroupList(tle, sortop, sortlist))
@@ -3144,7 +3192,7 @@ addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 
 		sortcl->sortop = sortop;
 
-		switch (sortby_nulls)
+		switch (sortby->sortby_nulls)
 		{
 			case SORTBY_NULLS_DEFAULT:
 				/* NULLS FIRST is default for DESC; other way for ASC */
@@ -3157,7 +3205,7 @@ addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 				sortcl->nulls_first = false;
 				break;
 			default:
-				elog(ERROR, "unrecognized sortby_nulls: %d", sortby_nulls);
+				elog(ERROR, "unrecognized sortby_nulls: %d", sortby->sortby_nulls);
 				break;
 		}
 

@@ -1,3 +1,7 @@
+/*
+ * GPDB_83MERGE_FIXME: PostgreSQL 8.3 added "bounded" sort support to
+ * tuplesort.c. It has not been ported to tuplesort_mk.c yet
+ */
 /*-------------------------------------------------------------------------
  *
  * tuplesort.c
@@ -902,6 +906,7 @@ tuplesort_begin_index_mk(Relation indexRel,
             tupdesc, 0, 0);
    
     state->mkctxt.enforceUnique = enforceUnique;
+	state->mkctxt.indexname = RelationGetRelationName(indexRel);
     state->mkctxt.indexRel = indexRel;
     MemoryContextSwitchTo(oldcontext);
 
@@ -951,6 +956,35 @@ tuplesort_begin_datum_mk(ScanState * ss,
     MemoryContextSwitchTo(oldcontext);
 
     return state;
+}
+
+/*
+ * tuplesort_set_bound
+ *
+ *	Advise tuplesort that at most the first N result tuples are required.
+ *
+ * Must be called before inserting any tuples.	(Actually, we could allow it
+ * as long as the sort hasn't spilled to disk, but there seems no need for
+ * delayed calls at the moment.)
+ *
+ * This is a hint only. The tuplesort may still return more tuples than
+ * requested.
+ */
+void
+tuplesort_set_bound_mk(Tuplesortstate_mk *state, int64 bound)
+{
+	/*
+	 * GPDB_83_MERGE_FIXME: bounded sort not implemented for tuplesort_mk.
+	 * The top-N feature was added to tuplesort.c in PostgreSQL 8.3, but it
+	 * hasn't been ported over to tuplesort_mk.c yet. Or perhaps we should just
+	 * pick the valuable parts of tuplesort_mk.c into tuplesort.c, and get
+	 * rid of the separate tuplesort_mk.c?
+	 *
+	 * Until we do something about this, everything's still going to work,
+	 * but the top-N optimization won't apply when tuplesort_mk is used.
+	 * Note that the planner doesn't know about that, so cost estimates
+	 * involving sorting with tuplesort_mk and LIMIT might be way off.
+	 */
 }
 
 /*

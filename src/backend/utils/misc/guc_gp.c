@@ -469,7 +469,6 @@ bool		enable_hashjoin = true;
 bool		gp_enable_hashjoin_size_heuristic = false;
 bool		gp_enable_fallback_plan = true;
 bool		gp_enable_predicate_propagation = false;
-bool		constraint_exclusion = false;
 bool		gp_enable_multiphase_agg = true;
 bool		gp_enable_preunique = TRUE;
 bool		gp_eager_preunique = FALSE;
@@ -580,9 +579,6 @@ bool		codegen;
 
 /* Security */
 bool		gp_reject_internal_tcp_conn = true;
-
-/* plpgsql plancache GUC */
-bool		gp_plpgsql_clear_cache_always = false;
 
 /*
  * Default storage options GUC.  Value is comma-separated name=value
@@ -3348,16 +3344,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 		},
 		&gp_reject_internal_tcp_conn,
 		true, NULL, NULL
-	},
-
-	{
-		{"gp_plpgsql_clear_cache_always", PGC_USERSET, DEVELOPER_OPTIONS,
-			gettext_noop("Controls caching of plpgsql plans in session"),
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_GPDB_ADDOPT
-		},
-		&gp_plpgsql_clear_cache_always,
-		false, NULL, NULL
 	},
 
 	{

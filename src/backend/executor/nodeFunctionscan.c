@@ -9,7 +9,7 @@
  *
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/executor/nodeFunctionscan.c,v 1.43 2007/02/19 02:23:11 tgl Exp $
+ *	  $PostgreSQL: pgsql/src/backend/executor/nodeFunctionscan.c,v 1.45.2.1 2008/02/29 02:49:43 neilc Exp $
  *
  *-------------------------------------------------------------------------
  */
@@ -26,8 +26,8 @@
 #include "cdb/cdbvars.h"
 #include "executor/nodeFunctionscan.h"
 #include "funcapi.h"
-#include "optimizer/var.h"              /* CDB: contain_var_reference() */
 #include "parser/parsetree.h"
+#include "optimizer/var.h"              /* CDB: contain_var_reference() */
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "cdb/memquota.h"
@@ -84,7 +84,6 @@ FunctionNext(FunctionScanState *node)
 			/* Request a callback at end of query. */
 			node->ss.ps.cdbexplainfun = ExecFunctionScanExplainEnd;
 		}
-
 	}
 
 	/*
