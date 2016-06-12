@@ -1995,7 +1995,7 @@ show_grouping_keys(Plan        *plan,
         appendStringInfoString(str, "  ");
     appendStringInfo(str, "  %s: ", qlabel);
 
-    /* Set up deparse context */
+	/* Set up deparse context */
 	context = deparse_context_for_plan((Node *) outerPlan(subplan),
 									   (Node *) innerPlan(subplan),
 									   es->rtable);
@@ -2097,6 +2097,7 @@ show_sort_keys(Plan *sortplan, int nkeys, AttrNumber *keycols,
 	appendStringInfo(str, "\n");
 }
 
+
 /*
  * CDB: Show the hash and merge keys for a Motion node.
  */
@@ -2115,7 +2116,7 @@ show_motion_keys(Plan *plan, List *hashExpr, int nkeys, AttrNumber *keycols,
         !hashExpr)
         return;
 
-    /* Set up deparse context */
+	/* Set up deparse context */
 	context = deparse_context_for_plan((Node *) outerPlan(plan),
 									   NULL,	/* Motion has no innerPlan */
 									   es->rtable);

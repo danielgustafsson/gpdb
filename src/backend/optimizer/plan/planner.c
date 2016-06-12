@@ -481,7 +481,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 
 	/*
-	 * Fix sharing id and shared id.  
+	 * Fix sharing id and shared id.
 	 *
 	 * This must be called before set_plan_references and cdbparallelize.  The other mutator
 	 * or tree walker assumes the input is a tree.  If there is plan sharing, we have a DAG. 
@@ -625,7 +625,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
  *--------------------
  */
 Plan *
-subquery_planner(PlannerGlobal *glob, Query *parse, 
+subquery_planner(PlannerGlobal *glob, Query *parse,
 				 PlannerInfo *parent_root,
 				 double tuple_fraction,
 				 PlannerInfo **subroot,

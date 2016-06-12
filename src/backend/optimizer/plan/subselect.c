@@ -889,7 +889,6 @@ hash_ok_operator(OpExpr *expr)
 	return true;
 }
 
-
 /*
  * convert_IN_to_join: can we convert an IN SubLink to join style?
  *
