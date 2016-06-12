@@ -3441,6 +3441,16 @@ CommitTransaction(void)
 	AtEOXact_UpdateFlatFiles(true);
 
 	/*
+	 * Free external resources
+	 */
+	AtEOXact_ExtTables(true);
+
+	/* Reset g_dataSourceCtx
+	 * g_dataSourceCtx is allocated in TopTransactionContext, so it's going away.
+	 */
+	AtEOXact_ResetDataSourceCtx();
+
+	/*
 	 * Prepare all QE.
 	 */
 	prepareDtxTransaction();
@@ -4042,7 +4052,13 @@ AbortTransaction(void)
 	 */
 	AfterTriggerEndXact(false);
 	AtAbort_Portals();
-	AtAbort_ExtTables();
+	AtEOXact_ExtTables(false);
+
+	/* reset g_dataSourceCtx
+	 * g_dataSourceCtx is allocated in TopTransactionContext, so it's going away.
+	 */
+	AtEOXact_ResetDataSourceCtx();
+
 	AtEOXact_SharedSnapshot();
 
 	/* Perform any Resource Scheduler abort procesing. */
