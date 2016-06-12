@@ -1874,19 +1874,20 @@ explain SELECT * FROM multiset_5( TABLE( SELECT count(*)::integer, 'hello'::text
 explain SELECT * FROM example_r WHERE (10, 'hello') in (SELECT * FROM multiset_5( TABLE( SELECT count(*)::integer, 'hello'::text from example_r )));
                                                    QUERY PLAN                                                   
 ----------------------------------------------------------------------------------------------------------------
- Gather Motion 2:1  (slice3; segments: 2)  (cost=2.24..4.46 rows=10 width=16)
-   ->  Nested Loop  (cost=2.24..4.46 rows=5 width=16)
-         ->  Broadcast Motion 1:2  (slice2; segments: 1)  (cost=2.24..2.26 rows=1 width=0)
-               ->  Limit  (cost=2.24..2.24 rows=1 width=0)
-                     ->  Table Function Scan on multiset_5  (cost=2.24..2.27 rows=1 width=0)
-                           Filter: 10 = multiset_5.a AND 'hello'::text = multiset_5.b
+ Gather Motion 2:1  (slice3; segments: 2)  (cost=2.28..4.51 rows=5 width=16)
+   ->  Nested Loop  (cost=2.28..4.51 rows=5 width=16)
+         ->  Broadcast Motion 1:2  (slice2; segments: 1)  (cost=2.28..2.31 rows=1 width=36)
+               ->  HashAggregate  (cost=2.31..2.32 rows=1 width=36)
+                     Group By: multiset_5.a, multiset_5.b
+                     ->  Table Function Scan on multiset_5  (cost=2.24..2.27 rows=8 width=36)
+                           Filter: 10 = a AND 'hello'::text = b
                            ->  Aggregate  (cost=2.24..2.25 rows=1 width=36)
                                  ->  Gather Motion 2:1  (slice1; segments: 2)  (cost=2.13..2.23 rows=1 width=8)
                                        ->  Aggregate  (cost=2.13..2.14 rows=1 width=8)
                                              ->  Seq Scan on example_r  (cost=0.00..2.10 rows=5 width=0)
          ->  Seq Scan on example_r  (cost=0.00..2.10 rows=5 width=16)
  Settings:  gp_segments_for_planner=8
-(12 rows)
+(13 rows)
 
 explain SELECT * FROM multiset_5( TABLE( SELECT * from example_v) );
                                  QUERY PLAN                                  
