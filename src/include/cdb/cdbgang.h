@@ -51,6 +51,9 @@ typedef struct Gang
 	MemoryContext perGangContext;
 } Gang;
 
+extern int qe_gang_id;
+
+
 extern Gang *allocateReaderGang(GangType type, char *portal_name);
 
 extern Gang *allocateWriterGang(void);
@@ -69,7 +72,7 @@ extern void CheckForResetSession(void);
 
 extern List *getAllIdleReaderGangs(void);
 
-extern List *getAllBusyReaderGangs(void);
+extern List *getAllAllocatedReaderGangs(void);
 
 extern CdbComponentDatabases *getComponentDatabases(void);
 
