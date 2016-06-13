@@ -1320,9 +1320,6 @@ ProcessUtility(Node *parsetree,
 
 				CheckRelationOwnership(stmt->relation, true);
 
-				/* GPDB_MERGE83_FIXME: Do we still need this in GPDB? */
-				//fix_opfuncids(stmt->whereClause);
-
 				/* ... and do it */
 				DefineIndex(stmt->relation,		/* relation */
 							stmt->idxname,		/* index name */
