@@ -299,6 +299,7 @@ _copySequence(Sequence *from)
 	Sequence *newnode = makeNode(Sequence);
 	CopyPlanFields((Plan *) from, (Plan *) newnode);
 	COPY_NODE_FIELD(subplans);
+	COPY_NODE_FIELD(static_selector);
 
 	return newnode;
 }

@@ -115,7 +115,7 @@ show_motion_keys(Plan *plan, List *hashExpr, int nkeys, AttrNumber *keycols,
 			     const char *qlabel,
                  StringInfo str, int indent, ExplainState *es);
 static void
-show_static_part_selection(Plan *plan, int indent, StringInfo str);
+show_static_part_selection(PartitionSelector *ps, Sequence *parent, StringInfo str, int indent, ExplainState *es);
 
 
 /*
@@ -1650,7 +1650,24 @@ explain_outNode(StringInfo str,
 				show_upper_qual(list_qual,
 								"Filter", plan,
 								str, indent, es);
-				show_static_part_selection(plan, indent, str);
+				if (((PartitionSelector *) plan)->staticSelection)
+				{
+					/*
+					 * We should not encounter static selectors as part of the
+					 * normal plan traversal: they are handled specially, as
+					 * part of a Sequence node.
+					 */
+					elog(WARNING, "unexpected static PartitionSelector");
+				}
+			}
+			break;
+		case T_Sequence:
+			{
+				Sequence *s = (Sequence *) plan;
+
+				if (s->static_selector)
+					show_static_part_selection(s->static_selector, s,
+											   str, indent, es);
 			}
 			break;
 		default:
@@ -2169,16 +2186,36 @@ show_motion_keys(Plan *plan, List *hashExpr, int nkeys, AttrNumber *keycols,
 
 /*
  * Show the number of statically selected partitions if available.
+ *
+ * This is similar to show_upper_qual(), but the "printablePredicate" produced
+ * by ORCA is a bit special: INNER Vars refer to the child of the Sequence node
+ * we are part of.
  */
 static void
-show_static_part_selection(Plan *plan, int indent, StringInfo str)
+show_static_part_selection(PartitionSelector *ps, Sequence *parent,
+						   StringInfo str, int indent, ExplainState *es)
 {
-	PartitionSelector *ps = (PartitionSelector *) plan;
+	List	   *context;
+	bool		useprefix;
+	char	   *exprstr;
+	int			i;
 
-	if (! ps->staticSelection)
-	{
+	if (!ps->staticSelection || !ps->printablePredicate)
 		return;
-	}
+
+	/* Set up deparsing context */
+	context = deparse_context_for_plan(NULL,
+									   (Node *) parent,
+									   es->rtable);
+	useprefix = list_length(es->rtable) > 1;
+
+	/* Deparse the expression */
+	exprstr = deparse_expr_sweet(ps->printablePredicate, context, useprefix, false);
+
+	/* And add to str */
+	for (i = 0; i < indent; i++)
+		appendStringInfo(str, "  ");
+	appendStringInfo(str, "  %s: %s\n", "Partition Selector", exprstr);
 
 	int nPartsSelected = list_length(ps->staticPartOids);
 	int nPartsTotal = countLeafPartTables(ps->relid);
@@ -2187,7 +2224,7 @@ show_static_part_selection(Plan *plan, int indent, StringInfo str)
 		appendStringInfoString(str, "  ");
 	}
 
-	appendStringInfo(str, "  Partitions selected:  %d (out of %d)\n", nPartsSelected, nPartsTotal);
+	appendStringInfo(str, "  Partitions selected: %d (out of %d)\n", nPartsSelected, nPartsTotal);
 }
 
 /*
