@@ -1875,13 +1875,12 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		int			sp_eflags;
 
 		/*
-		 * A subplan will never need to do BACKWARD scan nor MARK/RESTORE. If
-		 * it is a parameterless subplan (not initplan), we suggest that it be
-		 * prepared to handle REWIND efficiently; otherwise there is no need.
+		 * A subplan will never need to do BACKWARD scan nor MARK/RESTORE.
+		 *
+		 * GPDB: We always set the REWIND flag, to delay eagerfree.
 		 */
 		sp_eflags = eflags & EXEC_FLAG_EXPLAIN_ONLY;
-		if (bms_is_member(i, plannedstmt->rewindPlanIDs))
-			sp_eflags |= EXEC_FLAG_REWIND;
+		sp_eflags |= EXEC_FLAG_REWIND;
 
 		subplanstate = ExecInitNode(subplan, estate, sp_eflags);
 
