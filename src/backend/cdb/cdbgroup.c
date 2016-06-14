@@ -3968,8 +3968,6 @@ add_second_stage_agg(PlannerInfo *root,
 	RangeTblEntry *newrte;
 	RangeTblRef *newrtref;
 	Plan         *agg_node;
-	ListCell   *lc;
-	int			i;
 
 	/*
 	 * Add a SubqueryScan node to renumber the range of the query.
@@ -4096,34 +4094,20 @@ add_second_stage_agg(PlannerInfo *root,
 								  agg_node->lefttree, 
 								  (*p_current_pathkeys != NIL)
 								   && aggstrategy != AGG_HASHED );
-	
 
-	/* GPDB_83_MERGE_FIXME: quick band-aid fix.. Not sure why, but pfree'ing the
-	 * arrays below break groupClause. Which is quite surprising, I don't think
-	 * anything in it should point at the arrays. For now, just make a copy.
+	/* 
+	 * Since the rtable has changed, we had better recreate a RelOptInfo entry
+	 * for it. Make a copy of the groupClause since freeing the arrays can pull
+	 * out references still in use from underneath it.
 	 */
 	root->parse->groupClause = copyObject(root->parse->groupClause);
-	/* 
-	 * Since the rtable has changed, we had better recreate a RelOptInfo entry for it.
-	 */
+
 	if (root->simple_rel_array)
 		pfree(root->simple_rel_array);
 	if (root->simple_rte_array)
 		pfree(root->simple_rte_array);
 
-	root->simple_rel_array_size = list_length(parse->rtable) + 1;
-	root->simple_rte_array = (RangeTblEntry **)
-		palloc0(sizeof(RangeTblEntry *) * root->simple_rel_array_size);
-	i = 1;
-	foreach(lc, root->parse->rtable)
-	{
-		root->simple_rte_array[i] = lfirst(lc);
-		i++;
-	}
-
-	root->simple_rel_array = (RelOptInfo **)
-		palloc0(root->simple_rel_array_size * sizeof(RelOptInfo *));
-	build_simple_rel(root, 1, RELOPT_BASEREL);
+	rebuild_simple_rel_and_rte(root);
 
 	return agg_node;
 }
