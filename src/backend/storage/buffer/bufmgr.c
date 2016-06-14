@@ -1070,11 +1070,13 @@ KillAndReadBuffer(Buffer buffer,
 					 Relation relation,
 					 BlockNumber blockNum)
 {
+	MIRROREDLOCK_BUFMGR_MUST_ALREADY_BE_HELD;
+
 	/*
-	 * GPDB_83_MERGE_FIXME: This used to try to reuse the same buffer. This
-	 * is used for readahead in a seqscan. Instead of trying to make that
-	 * work efficiently, we should refactor the readahead code to use a
-	 * bulk BufferAccessStrategy instead. For now, just map this to
+	 * TODO: This used to try to reuse the same buffer. This is used for
+	 * readahead in a seqscan. Instead of trying to make that work
+	 * efficiently, we should refactor the readahead code to use a bulk
+	 * BufferAccessStrategy instead. For now, just map this to
 	 * ReleaseAndReadBuffer(), which doesn't try to do anything particularly
 	 * efficient.
 	 */
