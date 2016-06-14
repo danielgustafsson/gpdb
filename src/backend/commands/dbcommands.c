@@ -843,8 +843,6 @@ createdb_int(CreatedbStmt *stmt, CdbDispatcherState *ds)
 	 * converted to UTF16 before being used.
 	 *
 	 * Note: if you change this policy, fix initdb to match.
-	 *
-	 * GPDB_83_MERGE_FIXME: Check that initdb indeed matches!
 	 */
 	ctype_encoding = pg_get_encoding_from_locale(NULL);
 
