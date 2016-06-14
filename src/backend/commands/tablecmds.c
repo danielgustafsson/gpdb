@@ -11293,13 +11293,8 @@ ATExecEnableDisableTrigger(Relation rel, char *trigname,
 {
 	EnableDisableTrigger(rel, trigname, fires_when, skip_system);
 
-	/* GPDB_83_MERGE_FIXME: Do we need to do the metadata tracking call
-	 * like we do in ATExecEnableDisableTrigger above?
-	 */
-
 	/* MPP-6929: metadata tracking */
-	if (Gp_role == GP_ROLE_DISPATCH
-		&& MetaTrackValidKindNsp(rel->rd_rel))
+	if (Gp_role == GP_ROLE_DISPATCH && MetaTrackValidKindNsp(rel->rd_rel))
 	{
 		char	   *subtype;
 		switch (fires_when)
@@ -11338,10 +11333,6 @@ ATExecEnableDisableRule(Relation rel, char *trigname,
 						char fires_when)
 {
 	EnableDisableRule(rel, trigname, fires_when);
-
-	/* GPDB_83_MERGE_FIXME: Do we need to do the metadata tracking call
-	 * like we do in ATExecEnableDisableTrigger above?
-	 */
 }
 
 static void
