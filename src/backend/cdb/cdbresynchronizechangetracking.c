@@ -1962,17 +1962,11 @@ static void ChangeTracking_DropMetaFile(void)
 	changeTrackingResyncMeta->resync_transition_completed = false;
 	changeTrackingResyncMeta->insync_transition_completed = false;
 
-	/* delete the change tracking meta file*/
+	/* Delete the change tracking meta file */
 	ChangeTracking_SetPathByType(CTF_META, path);
 
 	if (unlink(path))
-	{
-		/* GPDB_83_MERGE_FIXME: is it possible that the file doesn't exist?
-		 * If I read the old code correctly, we would actually create the file,
-		 * and immediately delete it in that case.
-		 */
 		elog(WARNING, "could not unlink file \"%s\": %m", path);
-	}
 }
 
 /*
