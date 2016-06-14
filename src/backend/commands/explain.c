@@ -2241,7 +2241,10 @@ show_sort_info(SortState *sortstate,
 		char	   *sortinfo;
 		int			i;
 
-		sortinfo = tuplesort_explain((Tuplesortstate *) sortstate->tuplesortstate);
+		if (gp_enable_mk_sort)
+			sortinfo = tuplesort_explain_mk(sortstate->tuplesortstate->sortstore_mk);
+		else
+			sortinfo = tuplesort_explain(sortstate->tuplesortstate->sortstore);
 		for (i = 0; i < indent; i++)
 			appendStringInfo(str, "  ");
 		appendStringInfo(str, "  %s\n", sortinfo);
