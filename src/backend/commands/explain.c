@@ -2195,27 +2195,30 @@ static void
 show_static_part_selection(PartitionSelector *ps, Sequence *parent,
 						   StringInfo str, int indent, ExplainState *es)
 {
-	List	   *context;
-	bool		useprefix;
-	char	   *exprstr;
-	int			i;
-
-	if (!ps->staticSelection || !ps->printablePredicate)
+	if (!ps->staticSelection)
 		return;
 
-	/* Set up deparsing context */
-	context = deparse_context_for_plan(NULL,
-									   (Node *) parent,
-									   es->rtable);
-	useprefix = list_length(es->rtable) > 1;
+	if (ps->printablePredicate)
+	{
+		List	   *context;
+		bool		useprefix;
+		char	   *exprstr;
+		int			i;
 
-	/* Deparse the expression */
-	exprstr = deparse_expr_sweet(ps->printablePredicate, context, useprefix, false);
+		/* Set up deparsing context */
+		context = deparse_context_for_plan(NULL,
+										   (Node *) parent,
+										   es->rtable);
+		useprefix = list_length(es->rtable) > 1;
 
-	/* And add to str */
-	for (i = 0; i < indent; i++)
-		appendStringInfo(str, "  ");
-	appendStringInfo(str, "  %s: %s\n", "Partition Selector", exprstr);
+		/* Deparse the expression */
+		exprstr = deparse_expr_sweet(ps->printablePredicate, context, useprefix, false);
+
+		/* And add to str */
+		for (i = 0; i < indent; i++)
+			appendStringInfo(str, "  ");
+		appendStringInfo(str, "  %s: %s\n", "Partition Selector", exprstr);
+	}
 
 	int nPartsSelected = list_length(ps->staticPartOids);
 	int nPartsTotal = countLeafPartTables(ps->relid);
