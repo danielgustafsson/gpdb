@@ -380,6 +380,7 @@ define BUILD_STEPS
 	  $(MAKE) mkpljava INSTLOC=$(INSTLOC); \
 	fi
 	cd extensions/gpmapreduce/ && $(MAKE) install
+	cd extensions/gp_filedump/ && $(MAKE) install
 	@$(MAKE) copydocs INSTLOC=$(INSTLOC)
 	@$(MAKE) copylibs INSTLOC=$(INSTLOC)
 	@$(MAKE) clients INSTLOC=$(INSTLOC) CLIENTINSTLOC=$(CLIENTINSTLOC)
