@@ -235,13 +235,15 @@ create table defaulttest
             );
 NOTICE:  CREATE TABLE / PRIMARY KEY will create implicit index "defaulttest_pkey" for table "defaulttest"
 insert into defaulttest(col4) values(0); -- fails, col5 defaults to null
-ERROR:  null value in column "col5" violates not-null constraint
+ERROR:  One or more assertions failed
+DETAIL:  Not null constraint for column col5 of table defaulttest was violated
 alter table defaulttest alter column col5 drop default;
 insert into defaulttest default values; -- succeeds, inserts domain default
 -- We used to treat SET DEFAULT NULL as equivalent to DROP DEFAULT; wrong
 alter table defaulttest alter column col5 set default null;
 insert into defaulttest(col4) values(0); -- fails
-ERROR:  null value in column "col5" violates not-null constraint
+ERROR:  One or more assertions failed
+DETAIL:  Not null constraint for column col5 of table defaulttest was violated
 alter table defaulttest alter column col5 drop default;
 insert into defaulttest default values;
 insert into defaulttest default values;
