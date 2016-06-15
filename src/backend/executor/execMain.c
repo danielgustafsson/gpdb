@@ -634,8 +634,6 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
 
 				/* Patch Motion node so it looks like a top node. */
 				motionstate->ps.plan->nMotionNodes = estate->es_sliceTable->nMotions;
-				/* GPDB_83_MERGE_FIXME: do we still need to set nParamExec somewhere? */
-				//motionstate->ps.plan->nParamExec = estate->es_sliceTable->nInitPlans;
 			}
 
 			if (Debug_print_slice_table)
