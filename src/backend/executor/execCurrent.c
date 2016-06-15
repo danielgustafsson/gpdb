@@ -145,7 +145,12 @@ getCurrentOf(CurrentOfExpr *cexpr,
 	if (cexpr->cursor_name)
 		cursor_name = cexpr->cursor_name;
 	else
+	{
+		if (!econtext)
+			elog(ERROR, "no cursor name information found");
+
 		cursor_name = fetch_param_value(econtext, cexpr->cursor_param);
+	}
 
 	/* Fetch table name for possible use in error messages */
 	table_name = get_rel_name(table_oid);

@@ -3318,8 +3318,12 @@ pre_dispatch_function_evaluation_mutator(Node *node,
 		cpos = makeNode(CursorPosInfo);
 		cpos->cursor_name = expr->cursor_name;
 
+		/*
+		 * Passing a NULL econtext is Ok in this instance since getCurrentOf()
+		 * will pull out the cursor name from the CurrentOfExpr node.
+		 */
 		getCurrentOf(expr,
-					 NULL /* econtext */, /* GPDB_83_MERGE_FIXME */
+					 NULL /* econtext */,
 					 expr->target_relid,
 					 &cpos->ctid,
 					 &cpos->gp_segment_id,
