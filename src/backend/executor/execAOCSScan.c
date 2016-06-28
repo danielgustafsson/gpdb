@@ -13,7 +13,7 @@
 static void
 InitAOCSScanOpaque(TableScanState *state)
 {
-	Assert(state->opaque == NULL);
+	Assert((AOCSScanOpaqueData *) state->opaque.aocs == NULL);
 	state->opaque.aocs = palloc(sizeof(AOCSScanOpaqueData));
 
 	/* Initialize AOCS projection info */

@@ -102,9 +102,7 @@ initGpmonPktForTableScan(Plan *planNode, gpmon_packet_t *gpmon_pkt, EState *esta
 {
 	Assert(planNode != NULL && gpmon_pkt != NULL);
 	Assert(IsA(planNode, TableScan) ||
-		   IsA(planNode, SeqScan) ||
-		   IsA(planNode, AppendOnlyScan) ||
-		   IsA(planNode, AOCSScan));
+		   IsA(planNode, SeqScan));
 
 	RangeTblEntry *rte = rt_fetch(((Scan *)planNode)->scanrelid, estate->es_range_table);
 	char schema_rel_name[SCAN_REL_NAME_BUF_SIZE] = {0};

@@ -2239,10 +2239,8 @@ void mppExecutorCleanup(QueryDesc *queryDesc)
 void
 initGpmonPktForDefunctOperators(Plan *planNode, gpmon_packet_t *gpmon_pkt, EState *estate)
 {
-	Assert(IsA(planNode, SeqScan) ||
-		   IsA(planNode, AppendOnlyScan) ||
-		   IsA(planNode, AOCSScan));
-	insist_log(false, "SeqScan/AppendOnlyScan/AOCSScan are defunct");
+	Assert(IsA(planNode, SeqScan));
+	insist_log(false, "SeqScan is defunct");
 }
 
 void ResetExprContext(ExprContext *econtext)
