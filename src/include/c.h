@@ -843,11 +843,19 @@ typedef NameData *Name;
  * Mark a point as unreachable in a portable fashion.  This should preferably
  * be something that the compiler understands, to aid code generation.
  * In assert-enabled builds, we prefer abort() for debugging reasons.
+ *
+ * When mocking we want to avoid trapping an __builtin_unreachable() or abort()
+ * to be able to perform assertions after the ereport() call. Override the
+ * pg_unreachable() macro with a dummy.
  */
+#if !defined(UNITTEST_CHECK)
 #if defined(HAVE__BUILTIN_UNREACHABLE) && !defined(USE_ASSERT_CHECKING)
 #define pg_unreachable() __builtin_unreachable()
 #else
 #define pg_unreachable() abort()
+#endif
+#else
+#define pg_unreachable() ;
 #endif
 
 

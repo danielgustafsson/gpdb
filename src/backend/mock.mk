@@ -12,6 +12,7 @@ override CPPFLAGS+= -I$(top_srcdir)/src/backend/libpq \
 					-I$(top_srcdir)/src/backend/postmaster \
 					-I. -I$(top_builddir)/src/port \
 					-DDLSUFFIX=$(DLSUFFIX) \
+					-DUNITTEST_CHECK=1 \
 					-I$(top_srcdir)/src/backend/utils/stat
 
 # TODO: add ldl for quick hack; we need to figure out why
