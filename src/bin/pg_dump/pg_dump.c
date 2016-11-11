@@ -27,7 +27,6 @@
  *
  * IDENTIFICATION
  *	  $PostgreSQL: pgsql/src/bin/pg_dump/pg_dump.c,v 1.482.2.2 2009/04/01 18:54:33 tgl Exp $
-e
  *
  *-------------------------------------------------------------------------
  */
@@ -241,6 +240,21 @@ static int	dumpBlobComments(Archive *AH, void *arg __attribute__((unused)));
 static void dumpDatabase(Archive *AH);
 static void dumpEncoding(Archive *AH);
 static void dumpStdStrings(Archive *AH);
+static void binary_upgrade_preassign_procedure_oid(PQExpBuffer upgrade_buffer, Oid procoid,
+									   char *proname);
+static void binary_upgrade_set_type_oids_by_type_oid(
+								PQExpBuffer upgrade_buffer, Oid pg_type_oid, char *objname);
+static bool binary_upgrade_set_type_oids_by_rel_oid(
+								 PQExpBuffer upgrade_buffer, Oid pg_rel_oid, char *objname);
+static void binary_upgrade_set_pg_class_oids(PQExpBuffer upgrade_buffer,
+								 Oid pg_class_oid, bool is_index);
+static void binary_upgrade_set_extprot_oids(PQExpBuffer upgrade_buffer,
+								 Oid pg_extprot_oid, char *objname);
+static void binary_upgrade_set_opclass_oid(PQExpBuffer upgrade_buffer, char *objname);
+static void binary_upgrade_preassign_opfam_oid(PQExpBuffer upgrade_buffer, Oid opfoid,
+								char *objname, Oid opfnamespace);
+static void binary_upgrade_preassign_cast_oid(PQExpBuffer upgrade_buffer, Oid castoid,
+								  Oid castsource, Oid casttarget);
 static const char *getAttrName(int attrnum, TableInfo *tblInfo);
 static const char *fmtCopyColumnList(const TableInfo *ti);
 static void do_sql_command(PGconn *conn, const char *query);
@@ -2169,6 +2183,544 @@ dumpBlobComments(Archive *AH, void *arg __attribute__((unused)))
 	destroyPQExpBuffer(commentcmd);
 
 	return 1;
+}
+
+static void
+binary_upgrade_preassign_namespace_oid(PQExpBuffer upgrade_buffer, Oid nspoid,
+									   char *nspname)
+{
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_namespace_oid('%u'::pg_catalog.oid, "
+																	"'%s'::text);\n",
+					  nspoid, nspname);
+}
+
+static void
+binary_upgrade_preassign_procedure_oid(PQExpBuffer upgrade_buffer, Oid procoid,
+									   char *proname)
+{
+	PQExpBuffer	upgrade_query = createPQExpBuffer();
+	int			ntups;
+	PGresult   *upgrade_res;
+	Oid			pronamespace;
+
+	appendPQExpBuffer(upgrade_query, "SELECT pronamespace "
+									 "FROM   pg_catalog.pg_proc "
+									 "WHERE  oid = '%u'::pg_catalog.oid;",
+									 procoid);
+
+	upgrade_res = PQexec(g_conn, upgrade_query->data);
+	check_sql_result(upgrade_res, g_conn, upgrade_query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(upgrade_res);
+	if (ntups != 1)
+	{
+		write_msg(NULL, "ERROR: procedure %s not found in catalog", proname);
+		exit_nicely();
+	}
+	pronamespace = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "pronamespace")));
+
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_proc oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_procedure_oid('%u'::pg_catalog.oid, "
+																	"'%s'::text, "
+																	"'%u'::pg_catalog.oid);\n",
+					  procoid, proname, pronamespace);
+
+	PQclear(upgrade_res);
+	destroyPQExpBuffer(upgrade_query);
+}
+
+static void
+binary_upgrade_preassign_language_oid(PQExpBuffer upgrade_buffer, Oid langoid,
+									  char *lanname)
+{
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_language oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_language_oid('%u'::pg_catalog.oid, "
+																   "'%s'::text);",
+					  langoid, lanname);
+}
+
+static void
+binary_upgrade_preassign_cast_oid(PQExpBuffer upgrade_buffer, Oid castoid,
+								  Oid castsource, Oid casttarget)
+{
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_cast oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_cast_oid('%u'::pg_catalog.oid, "
+															   "'%u'::pg_catalog.oid, "
+															   "'%u'::pg_catalog.oid);",
+					  castoid, castsource, casttarget);
+}
+
+static void
+binary_upgrade_preassign_conversion_oid(PQExpBuffer upgrade_buffer, Oid conoid,
+										char *objname, Oid connamespace)
+{
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_conversion oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_conversion_oid('%u'::pg_catalog.oid, "
+																	 "'%s'::text, "
+																	 "'%u'::pg_catalog.oid);",
+					  conoid, objname, connamespace);
+}
+
+static void
+binary_upgrade_set_opclass_oid(PQExpBuffer upgrade_buffer, char *objname)
+{
+	PQExpBuffer	upgrade_query = createPQExpBuffer();
+	int			ntups;
+	PGresult   *upgrade_res;
+	Oid			pg_opclass_oid;
+	Oid			opcnamespace;
+
+	appendPQExpBuffer(upgrade_query,
+					  "SELECT oid, opcnamespace "
+					  "FROM pg_catalog.pg_opclass "
+					  "WHERE opcname = '%s'::text;",
+					  objname);
+
+	upgrade_res = PQexec(g_conn, upgrade_query->data);
+	check_sql_result(upgrade_res, g_conn, upgrade_query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(upgrade_res);
+	if (ntups != 1)
+	{
+		write_msg(NULL, "ERROR: opclass %s not found in catalog", objname);
+		exit_nicely();
+	}
+	pg_opclass_oid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "oid")));
+	opcnamespace = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "opcnamespace")));
+
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_opclass oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_opclass_oid('%u'::pg_opclass.oid, "
+																  "'%s'::text, "
+																  "'%u'::pg_opclass.opcnamespace);",
+					  pg_opclass_oid,
+					  objname,
+					  opcnamespace);
+
+	PQclear(upgrade_res);
+	destroyPQExpBuffer(upgrade_query);
+}
+
+static void
+binary_upgrade_preassign_opfam_oid(PQExpBuffer upgrade_buffer, Oid opfoid, char *objname, Oid opfnamespace)
+{
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pf_opfam oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_opfam_oid('%u'::pg_catalog.oid, "
+																"'%s'::text, "
+																"'%u'::pg_catalog.oid);",
+					  opfoid, objname, opfnamespace);
+}
+
+static void
+binary_upgrade_set_type_oids_by_type_oid(PQExpBuffer upgrade_buffer,
+										 Oid pg_type_oid, char *objname)
+{
+	PQExpBuffer upgrade_query = createPQExpBuffer();
+	int			ntups;
+	PGresult   *upgrade_res;
+	Oid			pg_type_array_oid;
+	Oid			typnamespace;
+
+	/*
+	 * Query for the typnamespace oid. This can be refactored into the below
+	 * query for array type but for now this seems what will cause the least
+	 * amount of merge conflicts so it's kept separate.
+	 */
+	appendPQExpBuffer(upgrade_query,
+					  "SELECT typnamespace "
+					  "FROM pg_catalog.pg_type "
+					  "WHERE pg_type.oid = '%u'::pg_catalog.oid;",
+					  pg_type_oid);
+	upgrade_res = PQexec(g_conn, upgrade_query->data);
+	check_sql_result(upgrade_res, g_conn, upgrade_query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(upgrade_res);
+	if (ntups != 1)
+	{
+		write_msg(NULL, "ERROR: type %u doesn't have a namespace set", pg_type_oid);
+		exit_nicely();
+	}
+	typnamespace = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "typnamespace")));
+	resetPQExpBuffer(upgrade_query);
+	PQclear(upgrade_res);
+
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_type oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_type_oid('%u'::pg_catalog.oid, "
+															   "'%s'::text, "
+															   "'%u'::pg_catalog.oid);\n\n",
+					  pg_type_oid, objname, typnamespace);
+
+	if (g_fout->remoteVersion >= 80300)
+	{
+		appendPQExpBuffer(upgrade_query,
+						  "SELECT typarray "
+						  "FROM pg_catalog.pg_type "
+						  "WHERE pg_type.oid = '%u'::pg_catalog.oid;",
+						  pg_type_oid);
+	}
+	else
+	{
+		/* 
+		 * Query to get the array type of a base type in GPDB 4.3, should we
+		 * need to support older versions then this would have to be extended.
+		 */
+		appendPQExpBuffer(upgrade_query,
+						  "SELECT arr.oid as typarray "
+						  "FROM pg_catalog.pg_type base, pg_catalog.pg_type arr "
+						  "WHERE base.oid = '%u'::pg_catalog.oid "
+						  "AND arr.typnamespace = base.typnamespace "
+						  "AND arr.typname = '_' || base.typname;",
+						  pg_type_oid);
+	}
+
+	upgrade_res = PQexec(g_conn, upgrade_query->data);
+	check_sql_result(upgrade_res, g_conn, upgrade_query->data, PGRES_TUPLES_OK);
+
+	/* Expecting a single result only */
+	ntups = PQntuples(upgrade_res);
+	if (ntups == 0 && g_fout->remoteVersion < 80300)
+	{
+		appendPQExpBuffer(upgrade_buffer,
+						  "\n-- XXX: No array type found for type %u\n",
+						  pg_type_oid);
+		PQclear(upgrade_res);
+		destroyPQExpBuffer(upgrade_query);
+		return;
+	}
+	if (ntups != 1)
+	{
+		write_msg(NULL, ngettext("query returned %d row instead of one: %s\n",
+							   "query returned %d rows instead of one: %s\n",
+								 ntups),
+				  ntups, upgrade_query->data);
+		exit_nicely();
+	}
+
+	pg_type_array_oid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "typarray")));
+
+	if (OidIsValid(pg_type_array_oid))
+	{
+		appendPQExpBuffer(upgrade_buffer,
+			   "\n-- For binary upgrade, must preserve pg_type array oid\n");
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT binary_upgrade.preassign_arraytype_oid('%u'::pg_catalog.oid, "
+																		"'_%s'::text, "
+																		"'%u'::pg_catalog.oid);\n\n",
+						  pg_type_array_oid, objname, typnamespace);
+	}
+
+	PQclear(upgrade_res);
+	destroyPQExpBuffer(upgrade_query);
+}
+
+static bool
+binary_upgrade_set_type_oids_by_rel_oid(PQExpBuffer upgrade_buffer,
+										Oid pg_rel_oid, char *objname)
+{
+	PQExpBuffer upgrade_query = createPQExpBuffer();
+	int			ntups;
+	PGresult   *upgrade_res;
+	Oid			pg_type_oid;
+	bool		toast_set = false;
+	bool		columnstore;
+
+	/* we only support old >= 8.3 for binary upgrades */
+	if (g_fout->remoteVersion >= 80300)
+		return false;
+
+	appendPQExpBuffer(upgrade_query,
+					  "SELECT c.reltype AS crel, t.reltype AS trel, "
+					  "       t.relnamespace AS trelnamespace, "
+					  "       aoseg.reltype AS aosegrel, "
+					  "       aoseg.relnamespace AS aonamespace, "
+					  "       aoblkdir.reltype AS aoblkdirrel, "
+					  "       aoblkdir.relnamespace AS aoblkdirnamespace, "
+					  "       aovisimap.reltype AS aovisimaprel, "
+					  "       aovisimap.relnamespace AS aovisimapnamespace, "
+					  "       ao.columnstore "
+					  "FROM pg_catalog.pg_class c "
+					  "LEFT JOIN pg_catalog.pg_class t ON "
+					  "  (c.reltoastrelid = t.oid) "
+					  "LEFT JOIN pg_catalog.pg_appendonly ao ON "
+					  "  (c.oid = ao.relid) "
+					  "LEFT JOIN pg_catalog.pg_class aoseg ON "
+					  "  (ao.segrelid = aoseg.oid) "
+					  "LEFT JOIN pg_catalog.pg_class aoblkdir ON "
+					  "  (ao.blkdirrelid = aoblkdir.oid) "
+					  "LEFT JOIN pg_catalog.pg_class aovisimap ON "
+					  "  (ao.visimaprelid = aovisimap.oid) "
+					  "WHERE c.oid = '%u'::pg_catalog.oid;",
+					  pg_rel_oid);
+
+	upgrade_res = PQexec(g_conn, upgrade_query->data);
+	check_sql_result(upgrade_res, g_conn, upgrade_query->data, PGRES_TUPLES_OK);
+
+	/* Expecting a single result only */
+	ntups = PQntuples(upgrade_res);
+	if (ntups != 1)
+	{
+		write_msg(NULL, ngettext("query returned %d row instead of one: %s\n",
+							   "query returned %d rows instead of one: %s\n",
+								 ntups),
+				  ntups, upgrade_query->data);
+		exit_nicely();
+	}
+
+	pg_type_oid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "crel")));
+	columnstore = (strcmp(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "columnstore")), "t") == 0) ? true : false;
+
+	binary_upgrade_set_type_oids_by_type_oid(upgrade_buffer, pg_type_oid, objname);
+
+	if (!PQgetisnull(upgrade_res, 0, PQfnumber(upgrade_res, "trel")))
+	{
+		/* Toast tables do not have pg_type array rows */
+		Oid			pg_type_toast_oid = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "trel")));
+		Oid			pg_type_toast_namespace_oid = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "trelnamespace")));
+
+		appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_type toast oid\n");
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT binary_upgrade.preassign_type_oid('%u'::pg_catalog.oid, "
+																	   "'pg_toast_%u'::text, "
+																	   "'%u'::pg_catalog.oid);\n",
+						  pg_type_toast_oid, pg_rel_oid, pg_type_toast_namespace_oid);
+
+		toast_set = true;
+	}
+
+	if (!PQgetisnull(upgrade_res, 0, PQfnumber(upgrade_res, "aosegrel")))
+	{
+		/* AO segment tables do not have pg_type array rows */
+		Oid			pg_type_aosegments_oid = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "aosegrel")));
+		Oid			pg_type_aonamespace_oid = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "aonamespace")));
+
+		appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_type aosegments oid\n");
+
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT binary_upgrade.preassign_type_oid('%u'::pg_catalog.oid, "
+																   "'pg_ao%sseg_%u'::text, "
+																   "'%u'::pg_catalog.oid);\n",
+						  pg_type_aosegments_oid, (columnstore ? "cs" : ""), pg_rel_oid, pg_type_aonamespace_oid);
+	}
+
+	if (!PQgetisnull(upgrade_res, 0, PQfnumber(upgrade_res, "aoblkdirrel")))
+	{
+		/* AO blockdir tables do not have pg_type array rows */
+		Oid			pg_type_aoblockdir_oid = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "aoblkdirrel")));
+		Oid			pg_type_aoblockdir_namespace = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "aoblkdirnamespace")));
+
+		appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_type aoblockdir oid\n");
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT binary_upgrade.preassign_type_oid('%u'::pg_catalog.oid, "
+																   "'pg_aoblkdir_%u'::text, "
+																   "'%u'::pg_catalog.oid);\n",
+						  pg_type_aoblockdir_oid, pg_rel_oid, pg_type_aoblockdir_namespace);
+	}
+
+	if (!PQgetisnull(upgrade_res, 0, PQfnumber(upgrade_res, "aovisimaprel")))
+	{
+		/* AO visimap tables do not have pg_type array rows */
+		Oid			pg_type_aovisimap_oid = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "aovisimaprel")));
+		Oid			pg_type_aovisimap_namespace = atooid(PQgetvalue(upgrade_res, 0,
+											PQfnumber(upgrade_res, "aovisimapnamespace")));
+
+		appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_type aovisimap oid\n");
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT binary_upgrade.preassign_type_oid('%u'::pg_catalog.oid, "
+																   "'pg_aovisimap_%u'::text, "
+																   "'%u'::pg_catalog.oid);",
+						  pg_type_aovisimap_oid, pg_rel_oid, pg_type_aovisimap_namespace);
+	}
+
+	PQclear(upgrade_res);
+	destroyPQExpBuffer(upgrade_query);
+
+	return toast_set;
+}
+
+/*
+ * For external protocols the oid retrieved in getExtProtocols() is what we
+ * need to instrument the CREATE .. PROTOCOL .. statement with.
+ */
+static void
+binary_upgrade_set_extprot_oids(PQExpBuffer upgrade_buffer,
+										Oid pg_extprot_oid,
+										char *objname)
+{
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_extprotocol oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_extprotocol_oid('%u'::pg_catalog.oid, "
+					  												  "'%s'::text);\n\n",
+					  pg_extprot_oid, objname);
+}
+
+static void
+binary_upgrade_set_pg_class_oids(PQExpBuffer upgrade_buffer, Oid pg_class_oid,
+								 bool is_index)
+{
+	PQExpBuffer upgrade_query = createPQExpBuffer();
+	int			ntups;
+	PGresult   *upgrade_res;
+	Oid			pg_class_reltoastnamespace;
+	Oid			pg_class_reltoastrelid;
+	Oid			pg_class_reltoastidxid;
+	Oid			pg_class_relnamespace;
+	char	   *pg_class_relname;
+	Oid			pg_appendonly_segrelid;
+	Oid			pg_appendonly_blkdirrelid;
+	Oid			pg_appendonly_blkdiridxid;
+	Oid			pg_appendonly_visimaprelid;
+	Oid			pg_appendonly_visimapidxid;
+	PQExpBuffer aoseg_query;
+	PGresult   *aoseg_res;
+	Oid			aoseg_namespace;
+	bool		columnstore;
+
+	appendPQExpBuffer(upgrade_query,
+					  "SELECT c.reltoastrelid, t.reltoastidxid, "
+					  "       t.relnamespace as toastnamespace, "
+					  "       ao.segrelid, c.relnamespace, "
+					  "       ao.blkdirrelid, ao.blkdiridxid, "
+					  "       ao.visimaprelid, ao.visimapidxid, "
+					  "       c.relname, ao.columnstore "
+					  "FROM pg_catalog.pg_class c LEFT JOIN "
+					  "pg_catalog.pg_class t ON (c.reltoastrelid = t.oid) "
+					  "LEFT JOIN pg_catalog.pg_appendonly ao ON (ao.relid = c.oid) "
+					  "WHERE c.oid = '%u'::pg_catalog.oid;",
+					  pg_class_oid);
+
+	upgrade_res = PQexec(g_conn, upgrade_query->data);
+	check_sql_result(upgrade_res, g_conn, upgrade_query->data, PGRES_TUPLES_OK);
+
+	/* Expecting a single result only */
+	ntups = PQntuples(upgrade_res);
+	if (ntups != 1)
+	{
+		write_msg(NULL, ngettext("query returned %d row instead of one: %s\n",
+							   "query returned %d rows instead of one: %s\n",
+								 ntups),
+				  ntups, upgrade_query->data);
+		exit_nicely();
+	}
+
+	pg_class_reltoastnamespace = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "toastnamespace")));
+	pg_class_reltoastrelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "reltoastrelid")));
+	pg_class_reltoastidxid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "reltoastidxid")));
+	pg_class_relnamespace = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "relnamespace")));
+	pg_class_relname = PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "relname"));
+	pg_appendonly_segrelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "segrelid")));
+	pg_appendonly_blkdirrelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "blkdirrelid")));
+	pg_appendonly_blkdiridxid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "blkdiridxid")));
+	pg_appendonly_visimaprelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "visimaprelid")));
+	pg_appendonly_visimapidxid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "visimapidxid")));
+	columnstore = (strcmp(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "columnstore")), "t") == 0) ? true : false;
+
+	appendPQExpBuffer(upgrade_buffer,
+					"\n-- For binary upgrade, must preserve pg_class oids\n");
+
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+						  											   "'%s'::text, "
+																	   "'%u'::pg_catalog.oid);\n",
+						  pg_class_oid, pg_class_relname, pg_class_relnamespace);
+
+		/*
+		 * If we have an AO relation we will need the aoseg namespace so
+		 * extract and save
+		 */
+		if (OidIsValid(pg_appendonly_segrelid))
+		{
+			aoseg_query = createPQExpBuffer();
+
+			appendPQExpBuffer(aoseg_query, "SELECT oid from pg_namespace WHERE nspname = 'pg_aoseg';");
+			aoseg_res = PQexec(g_conn, aoseg_query->data);
+			aoseg_namespace = atooid(PQgetvalue(aoseg_res, 0, PQfnumber(aoseg_res, "oid")));
+
+			PQclear(aoseg_res);
+			destroyPQExpBuffer(aoseg_query);
+		}
+
+		/* only tables have toast tables, not indexes */
+		if (OidIsValid(pg_class_reltoastrelid))
+		{
+			/*
+			 * One complexity is that the table definition might not require
+			 * the creation of a TOAST table, and the TOAST table might have
+			 * been created long after table creation, when the table was
+			 * loaded with wide data.  By setting the TOAST oid we force
+			 * creation of the TOAST heap and TOAST index by the backend so we
+			 * can cleanly copy the files during binary upgrade.
+			 */
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+																		   "'pg_toast_%u'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_class_reltoastrelid, pg_class_oid, pg_class_reltoastnamespace);
+
+
+			/* every toast table has an index */
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+																		   "'pg_toast_%u_index'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_class_reltoastidxid, pg_class_oid, pg_class_reltoastnamespace);
+		}
+		if (OidIsValid(pg_appendonly_segrelid))
+		{
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+																		   "'pg_ao%sseg_%u'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_appendonly_segrelid, (columnstore ? "cs" : ""), pg_class_oid, aoseg_namespace);
+		}
+		if (OidIsValid(pg_appendonly_blkdirrelid))
+		{
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+																		   "'pg_aoblkdir_%u'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_appendonly_blkdirrelid, pg_class_oid, aoseg_namespace);
+
+			/* every aoblockdir table has an index */
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+																		   "'pg_aoblkdir_%u_index'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_appendonly_blkdiridxid, pg_class_oid, aoseg_namespace);
+		}
+		if (OidIsValid(pg_appendonly_visimaprelid))
+		{
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+							  											   "'pg_aovisimap_%u'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_appendonly_visimaprelid, pg_class_oid, aoseg_namespace);
+
+			/* every aovisimap table has an index */
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT binary_upgrade.preassign_relation_oid('%u'::pg_catalog.oid, "
+							  											   "'pg_aovisimap_%u_index'::text, "
+																		   "'%u'::pg_catalog.oid);\n",
+							  pg_appendonly_visimapidxid, pg_class_oid, aoseg_namespace);
+		}
+
+	appendPQExpBuffer(upgrade_buffer, "\n");
+
+	PQclear(upgrade_res);
+	destroyPQExpBuffer(upgrade_query);
 }
 
 /*
@@ -5534,6 +6086,9 @@ dumpNamespace(Archive *fout, NamespaceInfo *nspinfo)
 
 	appendPQExpBuffer(delq, "DROP SCHEMA %s;\n", qnspname);
 
+	if (binary_upgrade)
+		binary_upgrade_preassign_namespace_oid(q, nspinfo->dobj.catId.oid, qnspname);
+
 	appendPQExpBuffer(q, "CREATE SCHEMA %s;\n", qnspname);
 
 	ArchiveEntry(fout, nspinfo->dobj.catId, nspinfo->dobj.dumpId,
@@ -5582,6 +6137,17 @@ dumpExtension(Archive *fout, ExtensionInfo *extinfo)
 	labelq = createPQExpBuffer();
 
 	qextname = strdup(fmtId(extinfo->dobj.name));
+
+	if (binary_upgrade)
+	{
+		/*
+		 * GPDB_84_MERGE_FIXME: dispatching oids for extensions is currently
+		 * not implemented as extenions were first introduced in Greenplum 5.0.
+		 * When merging PostgreSQL 8.4, implement this oid dispatch to cover
+		 * the 5.0 -> 6.0 upgrade cycle even though extensions aren't a part of
+		 * PostgreSQL 8.4.
+		 */
+	}
 
 	appendPQExpBuffer(delq, "DROP EXTENSION %s;\n", qextname);
 	appendPQExpBuffer(q, "CREATE EXTENSION IF NOT EXISTS %s WITH SCHEMA %s;\n",
@@ -5675,6 +6241,17 @@ dumpEnumType(Archive *fout, TypeInfo *tinfo)
 					  fmtId(tinfo->dobj.namespace->dobj.name));
 	appendPQExpBuffer(delq, "%s;\n",
 					  fmtId(tinfo->dobj.name));
+
+	if (binary_upgrade)
+	{
+		/*
+		 * GPDB_84_MERGE_FIXME: dispatching oids for ENUM types is currently
+		 * not implemented as ENUM was first introduced in Greenplum 5.0. When
+		 * merging PostgreSQL 8.4, implement this oid dispatch to cover the
+		 * 5.0 -> 6.0 upgrade cycle.
+		 */
+	}
+
 	appendPQExpBuffer(q, "CREATE TYPE %s AS ENUM (\n",
 					  fmtId(tinfo->dobj.name));
 	for (i = 0; i < num; i++)
@@ -5936,6 +6513,10 @@ dumpBaseType(Archive *fout, TypeInfo *tinfo)
 	appendPQExpBuffer(delq, "%s CASCADE;\n",
 					  fmtId(tinfo->dobj.name));
 
+	/* We might already have a shell type, but setting pg_type_oid is harmless */
+	if (binary_upgrade)
+		binary_upgrade_set_type_oids_by_type_oid(q, tinfo->dobj.catId.oid, tinfo->dobj.name);
+
 	appendPQExpBuffer(q,
 					  "CREATE TYPE %s (\n"
 					  "    INTERNALLENGTH = %s",
@@ -6135,6 +6716,9 @@ dumpDomain(Archive *fout, TypeInfo *tinfo)
 	else
 		typdefault = NULL;
 
+	if (binary_upgrade)
+		binary_upgrade_set_type_oids_by_type_oid(q, tinfo->dobj.catId.oid, tinfo->dobj.name);
+
 	appendPQExpBuffer(q,
 					  "CREATE DOMAIN %s AS %s",
 					  fmtId(tinfo->dobj.name),
@@ -6243,6 +6827,12 @@ dumpCompositeType(Archive *fout, TypeInfo *tinfo)
 	i_attname = PQfnumber(res, "attname");
 	i_atttypdefn = PQfnumber(res, "atttypdefn");
 
+	if (binary_upgrade)
+	{
+		binary_upgrade_set_type_oids_by_type_oid(q, tinfo->dobj.catId.oid, tinfo->dobj.name);
+		binary_upgrade_set_pg_class_oids(q, tinfo->typrelid, false);
+	}
+
 	appendPQExpBuffer(q, "CREATE TYPE %s AS (",
 					  fmtId(tinfo->dobj.name));
 
@@ -6317,6 +6907,10 @@ dumpShellType(Archive *fout, ShellTypeInfo *stinfo)
 	 * the shell type's owner immediately on creation; that should happen only
 	 * after it's filled in, otherwise the backend complains.
 	 */
+
+	if (binary_upgrade)
+		binary_upgrade_set_type_oids_by_type_oid(q,
+								stinfo->baseType->dobj.catId.oid, stinfo->dobj.name);
 
 	appendPQExpBuffer(q, "CREATE TYPE %s;\n",
 					  fmtId(stinfo->dobj.name));
@@ -6432,6 +7026,9 @@ dumpProcLang(Archive *fout, ProcLangInfo *plang)
 
 	appendPQExpBuffer(delqry, "DROP PROCEDURAL LANGUAGE %s;\n",
 					  qlanname);
+
+	if (binary_upgrade)
+		binary_upgrade_preassign_language_oid(defqry, plang->dobj.catId.oid, plang->dobj.name);
 
 	appendPQExpBuffer(defqry, "CREATE %sPROCEDURAL LANGUAGE %s",
 					  (useParams && plang->lanpltrusted) ? "TRUSTED " : "",
@@ -7089,6 +7686,9 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 					  fmtId(finfo->dobj.namespace->dobj.name),
 					  funcsig);
 
+	if (binary_upgrade)
+		binary_upgrade_preassign_procedure_oid(q, finfo->dobj.catId.oid, finfo->dobj.name);
+
 	appendPQExpBuffer(q, "CREATE FUNCTION %s ", funcfullsig);
 
 	if (funcresult)
@@ -7314,6 +7914,9 @@ dumpCast(Archive *fout, CastInfo *cast)
 	appendPQExpBuffer(delqry, "DROP CAST (%s AS %s);\n",
 					  getFormattedTypeName(cast->castsource, zeroAsNone),
 					  getFormattedTypeName(cast->casttarget, zeroAsNone));
+
+	if (binary_upgrade)
+		binary_upgrade_preassign_cast_oid(defqry, cast->dobj.catId.oid, cast->castsource, cast->casttarget);
 
 	appendPQExpBuffer(defqry, "CREATE CAST (%s AS %s) ",
 					  getFormattedTypeName(cast->castsource, zeroAsNone),
@@ -7836,6 +8439,9 @@ dumpOpclass(Archive *fout, OpclassInfo *opcinfo)
 	appendPQExpBuffer(delq, " USING %s;\n",
 					  fmtId(amname));
 
+	if (binary_upgrade)
+		binary_upgrade_set_opclass_oid(q, opcinfo->dobj.name);
+
 	/* Build the fixed portion of the CREATE command */
 	appendPQExpBuffer(q, "CREATE OPERATOR CLASS %s\n    ",
 					  fmtId(opcinfo->dobj.name));
@@ -8029,6 +8635,7 @@ dumpOpfamily(Archive *fout, OpfamilyInfo *opfinfo)
 	int			i_amproc;
 	int			i_amproclefttype;
 	int			i_amprocrighttype;
+	int			i_opfnamespace;
 	char	   *amname;
 	char	   *amopstrategy;
 	char	   *amopreqcheck;
@@ -8039,6 +8646,7 @@ dumpOpfamily(Archive *fout, OpfamilyInfo *opfinfo)
 	char	   *amprocrighttype;
 	bool		needComma;
 	int			i;
+	Oid			opfnamespace;
 
 	/* Skip if not to be dumped */
 	if (!opfinfo->dobj.dump || dataOnly)
@@ -8132,7 +8740,8 @@ dumpOpfamily(Archive *fout, OpfamilyInfo *opfinfo)
 	resetPQExpBuffer(query);
 
 	appendPQExpBuffer(query, "SELECT "
-	 "(SELECT amname FROM pg_catalog.pg_am WHERE oid = opfmethod) AS amname "
+	 "(SELECT amname FROM pg_catalog.pg_am WHERE oid = opfmethod) AS amname, "
+					  "opfnamespace "
 					  "FROM pg_catalog.pg_opfamily "
 					  "WHERE oid = '%u'::pg_catalog.oid",
 					  opfinfo->dobj.catId.oid);
@@ -8150,9 +8759,12 @@ dumpOpfamily(Archive *fout, OpfamilyInfo *opfinfo)
 	}
 
 	i_amname = PQfnumber(res, "amname");
+	i_opfnamespace = PQfnumber(res, "opfnamespace");
 
 	/* amname will still be needed after we PQclear res */
 	amname = strdup(PQgetvalue(res, 0, i_amname));
+
+	opfnamespace = atooid(PQgetvalue(res, 0, i_opfnamespace));
 
 	/*
 	 * DROP must be fully qualified in case same name appears in pg_catalog
@@ -8163,6 +8775,9 @@ dumpOpfamily(Archive *fout, OpfamilyInfo *opfinfo)
 					  fmtId(opfinfo->dobj.name));
 	appendPQExpBuffer(delq, " USING %s;\n",
 					  fmtId(amname));
+
+	if (binary_upgrade)
+		binary_upgrade_preassign_opfam_oid(q, opfinfo->dobj.catId.oid, opfinfo->dobj.name, opfnamespace);
 
 	/* Build the fixed portion of the CREATE command */
 	appendPQExpBuffer(q, "CREATE OPERATOR FAMILY %s",
@@ -8283,11 +8898,13 @@ dumpConversion(Archive *fout, ConvInfo *convinfo)
 	int			i_contoencoding;
 	int			i_conproc;
 	int			i_condefault;
+	int			i_connamespace;
 	const char *conname;
 	const char *conforencoding;
 	const char *contoencoding;
 	const char *conproc;
 	bool		condefault;
+	Oid			connamespace;
 
 	/* Skip if not to be dumped */
 	if (!convinfo->dobj.dump || dataOnly)
@@ -8305,7 +8922,7 @@ dumpConversion(Archive *fout, ConvInfo *convinfo)
 	appendPQExpBuffer(query, "SELECT conname, "
 		 "pg_catalog.pg_encoding_to_char(conforencoding) AS conforencoding, "
 		   "pg_catalog.pg_encoding_to_char(contoencoding) AS contoencoding, "
-					  "conproc, condefault "
+					  "conproc, condefault, connamespace "
 					  "FROM pg_catalog.pg_conversion c "
 					  "WHERE c.oid = '%u'::pg_catalog.oid",
 					  convinfo->dobj.catId.oid);
@@ -8327,12 +8944,14 @@ dumpConversion(Archive *fout, ConvInfo *convinfo)
 	i_contoencoding = PQfnumber(res, "contoencoding");
 	i_conproc = PQfnumber(res, "conproc");
 	i_condefault = PQfnumber(res, "condefault");
+	i_connamespace = PQfnumber(res, "connamespace");
 
 	conname = PQgetvalue(res, 0, i_conname);
 	conforencoding = PQgetvalue(res, 0, i_conforencoding);
 	contoencoding = PQgetvalue(res, 0, i_contoencoding);
 	conproc = PQgetvalue(res, 0, i_conproc);
 	condefault = (PQgetvalue(res, 0, i_condefault)[0] == 't');
+	connamespace = atooid(PQgetvalue(res, 0, i_connamespace));
 
 	/*
 	 * DROP must be fully qualified in case same name appears in pg_catalog
@@ -8341,6 +8960,9 @@ dumpConversion(Archive *fout, ConvInfo *convinfo)
 					  fmtId(convinfo->dobj.namespace->dobj.name));
 	appendPQExpBuffer(delq, ".%s;\n",
 					  fmtId(convinfo->dobj.name));
+
+	if (binary_upgrade)
+		binary_upgrade_preassign_conversion_oid(q, convinfo->dobj.catId.oid, convinfo->dobj.name, connamespace);
 
 	appendPQExpBuffer(q, "CREATE %sCONVERSION %s FOR ",
 					  (condefault) ? "DEFAULT " : "",
@@ -8681,7 +9303,7 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 	protoFuncs[WRITEFN_IDX].oid = ptcinfo->ptcwriteid;
 	protoFuncs[VALIDFN_IDX].oid = ptcinfo->ptcvalidid;
 
-	for(i=0; i<FCOUNT; i++)
+	for (i = 0; i < FCOUNT; i++)
 	{
 		if (protoFuncs[i].oid == InvalidOid)
 		{
@@ -8696,7 +9318,7 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 		else
 		{
 			protoFuncs[i].pfuncinfo = findFuncByOid(protoFuncs[i].oid);
-			if(protoFuncs[i].pfuncinfo != NULL)
+			if (protoFuncs[i].pfuncinfo != NULL)
 			{
 				protoFuncs[i].dumpable = true;
 				protoFuncs[i].name = strdup(protoFuncs[i].pfuncinfo->dobj.name);
@@ -8708,18 +9330,20 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 	}
 
 	/* if all funcs are internal then we do not need to dump this protocol */
-	if(protoFuncs[READFN_IDX].internal && protoFuncs[WRITEFN_IDX].internal
+	if (protoFuncs[READFN_IDX].internal && protoFuncs[WRITEFN_IDX].internal
 			&& protoFuncs[VALIDFN_IDX].internal)
 		return;
 
 	/* obtain the function name for internal functions (if any) */
-	for (i=0; i<FCOUNT; i++)
-		if(protoFuncs[i].internal && protoFuncs[i].oid)
+	for (i = 0; i < FCOUNT; i++)
+	{
+		if (protoFuncs[i].internal && protoFuncs[i].oid)
 		{
 			protoFuncs[i].name = getFunctionName(protoFuncs[i].oid);
-			if(protoFuncs[i].name)
+			if (protoFuncs[i].name)
 				protoFuncs[i].dumpable = true;
 		}
+	}
 
 	nsq = createPQExpBuffer();
 	q = createPQExpBuffer();
@@ -8759,6 +9383,9 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 						  nsq->data, (has_internal ? ", public" : ""));
 	}
 	destroyPQExpBuffer(nsq);
+
+ 	if (binary_upgrade)
+		binary_upgrade_set_extprot_oids(q, ptcinfo->dobj.catId.oid, ptcinfo->dobj.name);
 
 	appendPQExpBuffer(q, "CREATE %s PROTOCOL %s (",
 			ptcinfo->ptctrusted == true ? "TRUSTED" : "",
@@ -8810,9 +9437,11 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delq);
 
-	for(i=0; i<FCOUNT; i++)
-		if(protoFuncs[i].name)
-			free (protoFuncs[i].name);
+	for (i = 0; i < FCOUNT; i++)
+	{
+		if (protoFuncs[i].name)
+			free(protoFuncs[i].name);
+	}
 }
 
 /*
@@ -8834,6 +9463,16 @@ dumpTSParser(Archive *fout, TSParserInfo *prsinfo)
 
 	/* Make sure we are in proper schema */
 	selectSourceSchema(prsinfo->dobj.namespace->dobj.name);
+
+	if (binary_upgrade)
+	{
+		/*
+		 * GPDB_84_MERGE_FIXME: dispatching text search objects is currently
+		 * not implemented as ENUM was first introduced in Greenplum 5.0. When
+		 * merging PostgreSQL 8.4, implement this oid dispatch to cover the
+		 * 5.0 -> 6.0 upgrade cycle.
+		 */
+	}
 
 	appendPQExpBuffer(q, "CREATE TEXT SEARCH PARSER %s (\n",
 					  fmtId(prsinfo->dobj.name));
@@ -8923,6 +9562,16 @@ dumpTSDictionary(Archive *fout, TSDictInfo *dictinfo)
 	/* Make sure we are in proper schema */
 	selectSourceSchema(dictinfo->dobj.namespace->dobj.name);
 
+	if (binary_upgrade)
+	{
+		/*
+		 * GPDB_84_MERGE_FIXME: dispatching text search objects is currently
+		 * not implemented as ENUM was first introduced in Greenplum 5.0. When
+		 * merging PostgreSQL 8.4, implement this oid dispatch to cover the
+		 * 5.0 -> 6.0 upgrade cycle.
+		 */
+	}
+
 	appendPQExpBuffer(q, "CREATE TEXT SEARCH DICTIONARY %s (\n",
 					  fmtId(dictinfo->dobj.name));
 
@@ -8988,6 +9637,16 @@ dumpTSTemplate(Archive *fout, TSTemplateInfo *tmplinfo)
 
 	/* Make sure we are in proper schema */
 	selectSourceSchema(tmplinfo->dobj.namespace->dobj.name);
+
+	if (binary_upgrade)
+	{
+		/*
+		 * GPDB_84_MERGE_FIXME: dispatching text search objects is currently
+		 * not implemented as ENUM was first introduced in Greenplum 5.0. When
+		 * merging PostgreSQL 8.4, implement this oid dispatch to cover the
+		 * 5.0 -> 6.0 upgrade cycle.
+		 */
+	}
 
 	appendPQExpBuffer(q, "CREATE TEXT SEARCH TEMPLATE %s (\n",
 					  fmtId(tmplinfo->dobj.name));
@@ -9073,6 +9732,16 @@ dumpTSConfig(Archive *fout, TSConfigInfo *cfginfo)
 
 	/* Make sure we are in proper schema */
 	selectSourceSchema(cfginfo->dobj.namespace->dobj.name);
+
+	if (binary_upgrade)
+	{
+		/*
+		 * GPDB_84_MERGE_FIXME: dispatching text search objects is currently
+		 * not implemented as ENUM was first introduced in Greenplum 5.0. When
+		 * merging PostgreSQL 8.4, implement this oid dispatch to cover the
+		 * 5.0 -> 6.0 upgrade cycle.
+		 */
+	}
 
 	appendPQExpBuffer(q, "CREATE TEXT SEARCH CONFIGURATION %s (\n",
 					  fmtId(cfginfo->dobj.name));
@@ -9528,9 +10197,14 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 	char	   *storage;
 	int			j,
 				k;
-
+	bool		toast_set = false;
+	
 	/* Make sure we are in proper schema */
 	selectSourceSchema(tbinfo->dobj.namespace->dobj.name);
+
+	if (binary_upgrade)
+		toast_set = binary_upgrade_set_type_oids_by_rel_oid(q,
+												tbinfo->dobj.catId.oid, tbinfo->dobj.name);
 
 	/* Is it a table or a view? */
 	if (tbinfo->relkind == RELKIND_VIEW)
@@ -9576,6 +10250,9 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		appendPQExpBuffer(delq, "%s;\n",
 						  fmtId(tbinfo->dobj.name));
 
+		if (binary_upgrade)
+			binary_upgrade_set_pg_class_oids(q, tbinfo->dobj.catId.oid, false);
+
 		appendPQExpBuffer(q, "CREATE VIEW %s AS\n    %s\n",
 						  fmtId(tbinfo->dobj.name), viewdef);
 
@@ -9602,6 +10279,9 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 						  fmtId(tbinfo->dobj.namespace->dobj.name));
 		appendPQExpBuffer(delq, "%s;\n",
 						  fmtId(tbinfo->dobj.name));
+
+		if (binary_upgrade)
+			binary_upgrade_set_pg_class_oids(q, tbinfo->dobj.catId.oid, false);
 
 		appendPQExpBuffer(q, "CREATE TABLE %s (",
 						  fmtId(tbinfo->dobj.name));
@@ -10122,6 +10802,9 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 	 */
 	if (indxinfo->indexconstraint == 0)
 	{
+		if (binary_upgrade)
+			binary_upgrade_set_pg_class_oids(q, indxinfo->dobj.catId.oid, true);
+
 		/* Plain secondary index */
 		appendPQExpBuffer(q, "%s;\n", indxinfo->indexdef);
 
@@ -10198,6 +10881,9 @@ dumpConstraint(Archive *fout, ConstraintInfo *coninfo)
 					  coninfo->dobj.name);
 			exit_nicely();
 		}
+
+		if (binary_upgrade)
+			binary_upgrade_set_pg_class_oids(q, indxinfo->dobj.catId.oid, true);
 
 		appendPQExpBuffer(q, "ALTER TABLE ONLY %s\n",
 						  fmtId(tbinfo->dobj.name));
@@ -10487,6 +11173,16 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 						  fmtId(tbinfo->dobj.name));
 
 		resetPQExpBuffer(query);
+
+		if (binary_upgrade)
+		{
+			binary_upgrade_set_pg_class_oids(query,
+											 tbinfo->dobj.catId.oid, false);
+			binary_upgrade_set_type_oids_by_rel_oid(query,
+													tbinfo->dobj.catId.oid,
+													tbinfo->dobj.name);
+		}
+
 		appendPQExpBuffer(query,
 						  "CREATE SEQUENCE %s\n",
 						  fmtId(tbinfo->dobj.name));
@@ -10512,6 +11208,8 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 
 		appendPQExpBuffer(query, ";\n");
 
+		/* binary_upgrade:  no need to clear TOAST table oid */
+		
 		ArchiveEntry(fout, tbinfo->dobj.catId, tbinfo->dobj.dumpId,
 					 tbinfo->dobj.name,
 					 tbinfo->dobj.namespace->dobj.name,
