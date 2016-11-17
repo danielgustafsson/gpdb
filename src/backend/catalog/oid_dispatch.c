@@ -399,6 +399,9 @@ AddPreassignedOids(List *l)
 	ListCell *lc;
 	MemoryContext old_context;
 
+	if (IsBinaryUpgrade)
+		elog(ERROR, "AddPreassignedOids called during binary upgrade");
+
 	/*
 	 * In the master, the OID-assignment-list is usually included in the next
 	 * command that is dispatched, after an OID was assigned. In almost all
@@ -641,7 +644,12 @@ AddPreassignedOidFromBinaryUpgrade(Oid oid, Oid catalog, char *objname,
 	if (keyOid2)
 		assignment.keyOid2 = keyOid2;
 
-	oldcontext = MemoryContextSwitchTo(TopTransactionContext);
+	/*
+	 * Note that in binary-upgrade mode, the OID pre-assign calls are not done in
+	 * the same transactions as the DDL commands that consume the OIDs. Hence they
+	 * need to survive end-of-xact.
+	 */
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 
 	preassigned_oids = lappend(preassigned_oids, copyObject(&assignment));
 
@@ -755,16 +763,23 @@ AtEOXact_DispatchOids(bool isCommit)
 	 * might be dispatched to multiple slices, but only the QE writer
 	 * processes create the table. In the other processes, the OIDs will
 	 * go unused.
+	 *
+	 * In binary-upgrade mode, however, the OID pre-assign calls are not
+	 * done in the same transactions as the DDL commands that consume
+	 * the OIDs. Hence they need to survive end-of-xact.
 	 */
-#ifdef OID_DISPATCH_DEBUG
-	while (preassigned_oids)
+	if (!IsBinaryUpgrade)
 	{
-		OidAssignment *p = (OidAssignment *) linitial(preassigned_oids);
+#ifdef OID_DISPATCH_DEBUG
+		while (preassigned_oids)
+		{
+			OidAssignment *p = (OidAssignment *) linitial(preassigned_oids);
 
-		elog(NOTICE, "unused pre-assigned OID: catalog %u, namespace: %u, name: \"%s\"",
-			 p->catalog, p->namespaceOid, p->objname);
-		preassigned_oids = list_delete_first(preassigned_oids);
-	}
+			elog(NOTICE, "unused pre-assigned OID: catalog %u, namespace: %u, name: \"%s\"",
+				 p->catalog, p->namespaceOid, p->objname);
+			preassigned_oids = list_delete_first(preassigned_oids);
+		}
 #endif
-	preassigned_oids = NIL;
+		preassigned_oids = NIL;
+	}
 }
