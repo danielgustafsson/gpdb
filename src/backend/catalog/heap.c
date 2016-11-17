@@ -1620,7 +1620,7 @@ heap_create_with_catalog(const char *relname,
 	 *
 	 * Also not for the auxiliary heaps created for bitmap indexes.
 	 */
-	if (IsUnderPostmaster && (relkind == RELKIND_RELATION ||
+	if (IsUnderPostmaster && ((relkind == RELKIND_RELATION && !appendOnlyRel) ||
 							  relkind == RELKIND_VIEW ||
 							  relkind == RELKIND_COMPOSITE_TYPE) &&
 		relnamespace != PG_BITMAPINDEX_NAMESPACE)
