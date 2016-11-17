@@ -428,6 +428,28 @@ AddPreassignedOids(List *l)
 }
 
 /*
+ * For pg_upgrade_support functions, created during a binary upgrade, use OIDs
+ * from a special reserved block of OIDs. We cannot use "normal" OIDs for these,
+ * as they may collide with actual user objects restored later in the upgrade
+ * process.
+ */
+static Oid BinaryUpgradeSchemaReservedOid = FirstBinaryUpgradeReservedObjectId;
+static Oid NextBinaryUpgradeReservedOid = FirstBinaryUpgradeReservedObjectId + 1;
+
+static Oid
+AssignBinaryUpgradeReservedOid()
+{
+	Oid		result = NextBinaryUpgradeReservedOid;
+
+	if (result > LastBinaryUpgradeReservedObjectId)
+		elog(ERROR, "out of OIDs reserved for binary-upgrade");
+
+	NextBinaryUpgradeReservedOid++;
+
+	return result;
+}
+
+/*
  * Helper routine for GetPreassignedOidFor*() functions. Finds an entry in the
  * 'preassigned_oids' list with the given search key.
  *
@@ -440,6 +462,20 @@ GetPreassignedOid(OidAssignment *searchkey)
 	ListCell   *cur_item;
 	ListCell   *prev_item;
 	Oid			oid;
+
+	/*
+	 * For binary_upgrade schema, and any functions in it, use OIDs
+	 * from the reserved block.
+	 */
+	if (IsBinaryUpgrade)
+	{
+		if (searchkey->catalog == NamespaceRelationId &&
+			strcmp(searchkey->objname, "binary_upgrade") == 0)
+			return BinaryUpgradeSchemaReservedOid;
+		if (searchkey->catalog == ProcedureRelationId &&
+			searchkey->namespaceOid == BinaryUpgradeSchemaReservedOid)
+			return AssignBinaryUpgradeReservedOid();
+	}
 
 	prev_item = NULL;
 	cur_item = list_head(preassigned_oids);
