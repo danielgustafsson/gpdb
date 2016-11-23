@@ -20,6 +20,7 @@ static void prepare_new_cluster(migratorContext *ctx);
 static void prepare_new_databases(migratorContext *ctx);
 static void create_new_objects(migratorContext *ctx);
 static void copy_clog_xlog_xid(migratorContext *ctx);
+static void copy_distributedlog(migratorContext *ctx);
 static void set_frozenxids(migratorContext *ctx);
 static void setup(migratorContext *ctx, char *argv0, bool live_check);
 static void cleanup(migratorContext *ctx);
@@ -77,6 +78,7 @@ main(int argc, char **argv)
 	 */
 
 	copy_clog_xlog_xid(&ctx);
+	copy_distributedlog(&ctx);
 
 	/* New now using xids of the old system */
 
@@ -447,6 +449,38 @@ create_new_objects(migratorContext *ctx)
 	restore_aosegment_tables(ctx);
 
 	stop_postmaster(ctx, false, false);
+}
+
+/*
+ * In upgrading from GPDB4, copy the pg_distributedlog over in
+ * vanilla. The assumption that this works needs to be verified
+ */
+static void
+copy_distributedlog(migratorContext *ctx)
+{
+	char		old_dlog_path[MAXPGPATH];
+	char		new_dlog_path[MAXPGPATH];
+
+	prep_status(ctx, "Deleting new distributedlog");
+
+	snprintf(old_dlog_path, sizeof(old_dlog_path), "%s/pg_distributedlog", ctx->old.pgdata);
+	snprintf(new_dlog_path, sizeof(new_dlog_path), "%s/pg_distributedlog", ctx->new.pgdata);
+	if (rmtree(new_dlog_path, true) != true)
+		pg_log(ctx, PG_FATAL, "Unable to delete directory %s\n", new_dlog_path);
+	check_ok(ctx);
+
+	prep_status(ctx, "Copyying old distributedlog to new server");
+	/* libpgport's copydir() doesn't work in FRONTEND code */
+#ifndef WIN32
+	exec_prog(ctx, true, SYSTEMQUOTE "%s \"%s\" \"%s\"" SYSTEMQUOTE,
+			  "cp -Rf",
+#else
+	/* flags: everything, no confirm, quiet, overwrite read-only */
+	exec_prog(ctx, true, SYSTEMQUOTE "%s \"%s\" \"%s\\\"" SYSTEMQUOTE,
+			  "xcopy /e /y /q /r",
+#endif
+			  old_dlog_path, new_dlog_path);
+	check_ok(ctx);
 }
 
 static void
