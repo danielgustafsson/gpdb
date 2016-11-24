@@ -13,6 +13,7 @@
 #include "fmgr.h"
 #include "catalog/dependency.h"
 #include "catalog/oid_dispatch.h"
+#include "catalog/pg_attrdef.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_class.h"
@@ -54,6 +55,7 @@ Datum		preassign_language_oid(PG_FUNCTION_ARGS);
 Datum		preassign_relation_oid(PG_FUNCTION_ARGS);
 Datum		preassign_procedure_oid(PG_FUNCTION_ARGS);
 Datum		preassign_namespace_oid(PG_FUNCTION_ARGS);
+Datum		preassign_attrdef_oid(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(preassign_type_oid);
 PG_FUNCTION_INFO_V1(preassign_arraytype_oid);
@@ -72,6 +74,7 @@ PG_FUNCTION_INFO_V1(preassign_language_oid);
 PG_FUNCTION_INFO_V1(preassign_relation_oid);
 PG_FUNCTION_INFO_V1(preassign_procedure_oid);
 PG_FUNCTION_INFO_V1(preassign_namespace_oid);
+PG_FUNCTION_INFO_V1(preassign_attrdef_oid);
 
 Datum
 preassign_type_oid(PG_FUNCTION_ARGS)
@@ -335,6 +338,22 @@ preassign_namespace_oid(PG_FUNCTION_ARGS)
 	{
 		AddPreassignedOidFromBinaryUpgrade(nspoid, NamespaceRelationId, nspname,
 										   InvalidOid, InvalidOid, InvalidOid);
+	}
+
+	PG_RETURN_VOID();
+}
+
+Datum
+preassign_attrdef_oid(PG_FUNCTION_ARGS)
+{
+	Oid			attdefoid = PG_GETARG_OID(0);
+	Oid			attrelid = PG_GETARG_OID(1);
+	Oid			adnum = PG_GETARG_OID(2);
+
+	if (Gp_role == GP_ROLE_UTILITY)
+	{
+		AddPreassignedOidFromBinaryUpgrade(attdefoid, AttrDefaultRelationId, NULL,
+										   InvalidOid, attrelid, adnum);
 	}
 
 	PG_RETURN_VOID();

@@ -2573,6 +2573,18 @@ binary_upgrade_set_extprot_oids(PQExpBuffer upgrade_buffer,
 }
 
 static void
+binary_upgrade_set_attrdefs_oid(PQExpBuffer upgrade_buffer, Oid attrdefoid, Oid attreloid, int adnum)
+{
+
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve attrdef oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_attrdef_oid('%u'::pg_catalog.oid, "
+																  "'%u'::pg_catalog.oid, "
+																  "'%u'::pg_catalog.oid);\n\n",
+					  attrdefoid, attreloid, adnum);
+}
+
+static void
 binary_upgrade_set_pg_class_oids(PQExpBuffer upgrade_buffer, Oid pg_class_oid,
 								 bool is_index)
 {
@@ -10286,7 +10298,16 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 						  fmtId(tbinfo->dobj.name));
 
 		if (binary_upgrade)
+		{
 			binary_upgrade_set_pg_class_oids(q, tbinfo->dobj.catId.oid, false);
+
+			for (j = 0; j < tbinfo->numatts; j++)
+			{
+				if (tbinfo->attrdefs[j] != NULL)
+					binary_upgrade_set_attrdefs_oid(q, tbinfo->attrdefs[j]->dobj.catId.oid,
+													tbinfo->dobj.catId.oid, tbinfo->attrdefs[j]->adnum);
+			}
+		}
 
 		appendPQExpBuffer(q, "CREATE TABLE %s (",
 						  fmtId(tbinfo->dobj.name));
