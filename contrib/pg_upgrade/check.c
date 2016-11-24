@@ -113,6 +113,7 @@ check_old_cluster(migratorContext *ctx, bool live_check,
 		old_8_3_check_for_name_data_type_usage(ctx, CLUSTER_OLD);
 
 		old_GPDB4_check_for_money_data_type_usage(ctx, CLUSTER_OLD);
+		old_GPDB4_check_no_free_aoseg(ctx, CLUSTER_OLD);
 	}
 
 	if (GET_MAJOR_VERSION(ctx->old.major_version) <= 803 &&

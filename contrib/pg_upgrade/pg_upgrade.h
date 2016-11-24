@@ -490,3 +490,4 @@ char *old_8_3_create_sequence_script(migratorContext *ctx,
 /* version_old_gpdb4.c */
 void old_GPDB4_dump_array_types(migratorContext *ctx, Cluster whichCluster);
 void old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichCluster);
+void old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster);
