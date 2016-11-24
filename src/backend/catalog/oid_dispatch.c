@@ -594,7 +594,12 @@ GetPreassignedOidForType(Oid namespaceOid, const char *typname)
 	searchkey.namespaceOid = namespaceOid;
 	searchkey.objname = (char *) typname;
 
-	if ((oid = GetPreassignedOid(&searchkey)) == InvalidOid)
+	/*
+	 * We allow InvalidOid during binary upgrades as a way to signal that a new
+	 * oid is to be allocated for a new catalog object not present in the old
+	 * version during an upgrade
+	 */
+	if ((oid = GetPreassignedOid(&searchkey)) == InvalidOid && !IsBinaryUpgrade)
 		elog(ERROR, "no pre-assigned OID for type \"%s\"", typname);
 	return oid;
 }
@@ -631,8 +636,7 @@ AddPreassignedOidFromBinaryUpgrade(Oid oid, Oid catalog, char *objname,
 	 * This is essentially mimicking CreateKeyFromCatalogTuple except we set
 	 * the members directly from the binary_upgrade function
 	 */
-	if (oid != InvalidOid)
-		assignment.oid = oid;
+	assignment.oid = oid;
 	if (catalog != InvalidOid)
 		assignment.catalog = catalog;
 	if (objname != NULL)

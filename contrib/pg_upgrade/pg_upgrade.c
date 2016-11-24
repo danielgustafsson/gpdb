@@ -432,6 +432,13 @@ create_new_objects(migratorContext *ctx)
 	dbarr_free(&ctx->new.dbarr);
 	get_db_and_rel_infos(ctx, &ctx->new.dbarr, CLUSTER_NEW);
 
+	/*
+	 * When upgrading from GPDB4, dump the OIDs of the created array types
+	 * before shutting down the new cluster
+	 */
+	if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802)
+		old_GPDB4_dump_array_types(ctx, CLUSTER_NEW);
+
 	uninstall_support_functions(ctx);
 
 	/*

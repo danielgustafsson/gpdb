@@ -33,6 +33,7 @@
 /* contains both global db information and CREATE DATABASE commands */
 #define GLOBALS_DUMP_FILE	"pg_upgrade_dump_globals.sql"
 #define DB_DUMP_FILE		"pg_upgrade_dump_db.sql"
+#define ARRAY_DUMP_FILE		"pg_upgrade_dump_arraytypes.sql"
 
 #ifndef WIN32
 #define pg_copy_file		copy_file
@@ -487,4 +488,5 @@ char *old_8_3_create_sequence_script(migratorContext *ctx,
 							   Cluster whichCluster);
 
 /* version_old_gpdb4.c */
+void old_GPDB4_dump_array_types(migratorContext *ctx, Cluster whichCluster);
 void old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichCluster);
