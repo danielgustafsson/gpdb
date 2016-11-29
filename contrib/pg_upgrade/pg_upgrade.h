@@ -90,6 +90,15 @@ typedef struct
 	char	   *visimap;		/* text representation of the "bit varying" field */
 } AOVisiMapInfo;
 
+typedef struct
+{
+	int			segno;
+	int			columngroup_no;
+	int64		first_row_no;
+	char	   *minipage;		/* text representation of the "bit varying" field */
+
+} AOBlkDir;
+
 /* To hold contents of pg_aoseg_<oid> */
 typedef struct
 {
@@ -102,6 +111,18 @@ typedef struct
 	int16		version;
 	int16		state;
 } AOSegInfo;
+
+/* To hold contents of pf_aocsseg_<oid> */
+typedef struct
+{
+	int         segno;
+	int64		tupcount;
+	int64		varblockcount;
+	char       *vpinfo;
+	int64		modcount;
+	int16		state;
+	int16		version;
+} AOCSSegInfo;
 
 typedef struct
 {
@@ -126,9 +147,12 @@ typedef struct
 
 	/* Extra information for append-only tables */
 	AOSegInfo  *aosegments;
+	AOCSSegInfo *aocssegments;
 	int			naosegments;
 	AOVisiMapInfo *aovisimaps;
 	int			naovisimaps;
+	AOBlkDir   *aoblkdirs;
+	int			naoblkdirs;
 
 	/* Extra information for heap tables */
 	bool		gpdb4_heap_conversion_needed;

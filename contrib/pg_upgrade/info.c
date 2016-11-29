@@ -65,6 +65,10 @@ gen_db_file_maps(migratorContext *ctx, DbInfo *old_db, DbInfo *new_db,
 		if (strcmp(newrel->nspname, "pg_toast") == 0)
 			continue;
 
+		/* aoseg tables are handled by their AO table */
+		if (strcmp(newrel->nspname, "pg_aoseg") == 0)
+			continue;
+
 		oldrel = relarr_lookup_rel(ctx, &(old_db->rel_arr), newrel->nspname,
 								   newrel->relname, CLUSTER_OLD);
 
@@ -397,7 +401,7 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 			 "	n.nspname = 'pg_catalog' "
 			 "	AND relname IN "
 			 "        ('pg_largeobject', 'pg_largeobject_loid_pn_index'%s) )) "
-			 "	AND relkind IN ('r','t', 'i'%s) "
+			 "	AND relkind IN ('r','t','o','m','b', 'i'%s) "
 			 /* pg_dump only dumps valid indexes;  testing indisready is
 			 * necessary in 9.2, and harmless in earlier/later versions. */
 			 /* GPDB 4.3 (based on PostgreSQL 8.2), however, doesn't have indisvalid
@@ -466,52 +470,103 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 
 		relkind = PQgetvalue(res, relnum, i_relkind) [0];
 
-		if (relstorage == 'a')  /* RELSTORAGE_AOROWS */
+		/*
+		 * RELSTORAGE_AOROWS and RELSTORAGE_AOCOLS. The structure of append
+		 * optimized tables is similar enough for row and column oriented
+		 * tables so we can handle them both here.
+		 */
+		if (relstorage == 'a' || relstorage == 'c')
 		{
 			char		aoquery[QUERY_ALLOC];
 			PGresult   *aores;
 			int			j;
 
-			/* Get contents of pg_aoseg_<oid> */
-
-			/*
-			 * In GPDB 4.3, the append only file format version number was the
-			 * same for all segments, and was stored in pg_appendonly. In 5.0
-			 * and above, it can be different for each segment, and it's stored
-			 * in the aosegment relation.
-			 */
-			if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
+			if (relstorage == 'a')
 			{
-				snprintf(aoquery, sizeof(aoquery),
-						 "SELECT segno, eof, tupcount, varblockcount, eofuncompressed, modcount, state, ao.version as formatversion "
-						 "FROM pg_aoseg.pg_aoseg_%u, pg_catalog.pg_appendonly ao "
-						 "WHERE ao.relid = %u /* %s */",
-						 curr->reloid, curr->reloid, relname);
+				/* Get contents of pg_aoseg_<oid> */
+
+				/*
+				 * In GPDB 4.3, the append only file format version number was the
+				 * same for all segments, and was stored in pg_appendonly. In 5.0
+				 * and above, it can be different for each segment, and it's stored
+				 * in the aosegment relation.
+				 */
+				if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
+				{
+					snprintf(aoquery, sizeof(aoquery),
+							 "SELECT segno, eof, tupcount, varblockcount, eofuncompressed, modcount, state, ao.version as formatversion "
+							 "FROM pg_aoseg.pg_aoseg_%u, pg_catalog.pg_appendonly ao "
+							 "WHERE ao.relid = %u /* %s */",
+							 curr->reloid, curr->reloid, relname);
+				}
+				else
+				{
+					snprintf(aoquery, sizeof(aoquery),
+							 "SELECT segno, eof, tupcount, varblockcount, eofuncompressed, modcount, state, formatversion "
+							 "FROM pg_aoseg.pg_aoseg_%u",
+							 curr->reloid);
+				}
+				aores = executeQueryOrDie(ctx, conn, aoquery);
+
+				curr->naosegments = PQntuples(aores);
+				curr->aosegments = (AOSegInfo *) pg_malloc(ctx, sizeof(AOSegInfo) * curr->naosegments);
+
+				for (j = 0; j < curr->naosegments; j++)
+				{
+					AOSegInfo *aoseg = &curr->aosegments[j];
+
+					aoseg->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
+					aoseg->eof = atoll(PQgetvalue(aores, j, PQfnumber(aores, "eof")));
+					aoseg->tupcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "tupcount")));
+					aoseg->varblockcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "varblockcount")));
+					aoseg->eofuncompressed = atoll(PQgetvalue(aores, j, PQfnumber(aores, "eofuncompressed")));
+					aoseg->modcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "modcount")));
+					aoseg->state = atoi(PQgetvalue(aores, j, PQfnumber(aores, "state")));
+					aoseg->version = atoi(PQgetvalue(aores, j, PQfnumber(aores, "formatversion")));
+				}
+
+				PQclear(aores);
 			}
 			else
 			{
-				snprintf(aoquery, sizeof(aoquery),
-						 "SELECT segno, eof, tupcount, varblockcount, eofuncompressed, modcount, state, formatversion "
-						 "FROM pg_aoseg.pg_aoseg_%u",
-						 curr->reloid);
-			}
-			aores = executeQueryOrDie(ctx, conn, aoquery);
+				/* Get contents of pg_aocsseg_<oid> */
+				if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
+				{
+					snprintf(aoquery, sizeof(aoquery),
+							 "SELECT segno, tupcount, varblockcount, vpinfo, "
+							 "       modcount, state, ao.version as formatversion "
+							 "FROM   pg_aoseg.pg_aocsseg_%u, "
+							 "       pg_catalog.pg_appendonly ao "
+							 "WHERE  ao.relid = %u",
+							 curr->reloid, curr->reloid);
+				}
+				else
+				{
+					snprintf(aoquery, sizeof(aoquery),
+							 "SELECT segno, tupcount, varblockcount, vpinfo, "
+							 "       modcount, formatversion, state "
+							 "FROM   pg_aoseg.pg_aocsseg_%u",
+							 curr->reloid);
+				}
 
-			curr->naosegments = PQntuples(aores);
-			curr->aosegments = (AOSegInfo *) pg_malloc(ctx, sizeof(AOSegInfo) * curr->naosegments);
+				aores = executeQueryOrDie(ctx, conn, aoquery);
 
-			for (j = 0; j < curr->naosegments; j++)
-			{
-				AOSegInfo *aoseg = &curr->aosegments[j];
+				curr->naosegments = PQntuples(aores);
+				curr->aocssegments = (AOCSSegInfo *) pg_malloc(ctx, sizeof(AOCSSegInfo) * curr->naosegments);
 
-				aoseg->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
-				aoseg->eof = atoll(PQgetvalue(aores, j, PQfnumber(aores, "eof")));
-				aoseg->tupcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "tupcount")));
-				aoseg->varblockcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "varblockcount")));
-				aoseg->eofuncompressed = atoll(PQgetvalue(aores, j, PQfnumber(aores, "eofuncompressed")));
-				aoseg->modcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "modcount")));
-				aoseg->state = atoi(PQgetvalue(aores, j, PQfnumber(aores, "state")));
-				aoseg->version = atoi(PQgetvalue(aores, j, PQfnumber(aores, "formatversion")));
+				for (j = 0; j < curr->naosegments; j++)
+				{
+					AOCSSegInfo *aocsseg = &curr->aocssegments[j];
+
+					aocsseg->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
+					aocsseg->tupcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "tupcount")));
+					aocsseg->varblockcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "varblockcount")));
+					aocsseg->vpinfo = strdup(PQgetvalue(aores, j, PQfnumber(aores, "vpinfo")));
+					aocsseg->modcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "modcount")));
+					aocsseg->state = atoi(PQgetvalue(aores, j, PQfnumber(aores, "state")));
+				}
+
+				PQclear(aores);
 			}
 
 			/*
@@ -522,6 +577,8 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 			 * we won't get the valid data out by calling the varbit output function on it.
 			 * Create a little function to blurp out its content as a bytea instead. in
 			 * 5.0 and above, the datatype is also nominally a bytea.
+			 *
+			 * pg_aovisimap_<oid> is identical for row and column oriented tables.
 			 */
 			if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
 			{
@@ -558,13 +615,53 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 				aovisimap->first_row_no = atoll(PQgetvalue(aores, j, PQfnumber(aores, "first_row_no")));
 				aovisimap->visimap = strdup(PQgetvalue(aores, j, PQfnumber(aores, "visimap")));
 			}
+
+			PQclear(aores);
+
+			/*
+			 * Get contents of pg_aoblkdir_<oid>
+			 */
+			if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
+			{
+				snprintf(aoquery, sizeof(aoquery),
+						 "SELECT segno, columngroup_no, first_row_no, "
+						 "       pg_temp.bitmaphack(minipage) as minipage "
+						 "FROM   pg_aoseg.pg_aoblkdir_%u WHERE segno IS NOT NULL",
+						 curr->reloid);
+			}
+			else
+			{
+				snprintf(aoquery, sizeof(aoquery),
+						 "SELECT segno, columngroup_no, first_row_no, minipage "
+						 "FROM   pg_aoseg.pg_aoblkdir_%u",
+						 curr->reloid);
+			}
+			aores = executeQueryOrDie(ctx, conn, aoquery);
+
+			curr->naoblkdirs = PQntuples(aores);
+			curr->aoblkdirs = (AOBlkDir *) pg_malloc(ctx, sizeof(AOBlkDir) * curr->naoblkdirs);
+
+			for (j = 0; j < curr->naoblkdirs; j++)
+			{
+				AOBlkDir *aoblkdir = &curr->aoblkdirs[j];
+
+				aoblkdir->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
+				aoblkdir->columngroup_no = atoi(PQgetvalue(aores, j, PQfnumber(aores, "columngroup_no")));
+				aoblkdir->first_row_no = atoll(PQgetvalue(aores, j, PQfnumber(aores, "first_row_no")));
+				aoblkdir->minipage = strdup(PQgetvalue(aores, j, PQfnumber(aores, "minipage")));
+			}
+
+			PQclear(aores);
 		}
 		else
 		{
 			curr->aosegments = NULL;
+			curr->aocssegments = NULL;
 			curr->naosegments = 0;
 			curr->aovisimaps = NULL;
 			curr->naovisimaps = 0;
+			curr->naoblkdirs = 0;
+			curr->aoblkdirs = NULL;
 		}
 
 		if (relstorage == 'h' && /* RELSTORAGE_HEAP */

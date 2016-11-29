@@ -428,6 +428,9 @@ create_new_objects(migratorContext *ctx)
 			  );
 	check_ok(ctx);
 
+	/* Restore contents of AO auxiliary tables */
+	restore_aosegment_tables(ctx);
+
 	/* regenerate now that we have db schemas */
 	dbarr_free(&ctx->new.dbarr);
 	get_db_and_rel_infos(ctx, &ctx->new.dbarr, CLUSTER_NEW);
@@ -451,9 +454,6 @@ create_new_objects(migratorContext *ctx)
 	 */
 	//if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802)
 	//	mark_indexes_invalid(ctx);
-
-	/* Restore contents of AO auxiliary tables */
-	restore_aosegment_tables(ctx);
 
 	stop_postmaster(ctx, false, false);
 }
