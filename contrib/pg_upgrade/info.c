@@ -481,6 +481,7 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 			char		aoquery[QUERY_ALLOC];
 			PGresult   *aores;
 			int			j;
+			Oid			blkdirrelid;
 
 			if (relstorage == 'a')
 			{
@@ -620,39 +621,56 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 			PQclear(aores);
 
 			/*
-			 * Get contents of pg_aoblkdir_<oid>
+			 * Get contents of pg_aoblkdir_<oid>. If pg_appendonly.blkdirrelid
+			 * is InvalidOid then there is no blkdir table.
 			 */
-			if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
+			snprintf(aoquery, sizeof(aoquery),
+					 "SELECT blkdirrelid FROM pg_appendonly WHERE relid = '%u'::pg_catalog.oid",
+					 curr->reloid);
+			aores = executeQueryOrDie(ctx, conn, aoquery);
+
+			blkdirrelid = atooid(PQgetvalue(aores, 0, PQfnumber(aores, "blkdirrelid")));
+			PQclear(aores);
+			
+			if (blkdirrelid != InvalidOid)
 			{
-				snprintf(aoquery, sizeof(aoquery),
-						 "SELECT segno, columngroup_no, first_row_no, "
-						 "       pg_temp.bitmaphack(minipage) as minipage "
-						 "FROM   pg_aoseg.pg_aoblkdir_%u WHERE segno IS NOT NULL",
-						 curr->reloid);
+				if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
+				{
+					snprintf(aoquery, sizeof(aoquery),
+							 "SELECT segno, columngroup_no, first_row_no, "
+							 "       pg_temp.bitmaphack(minipage) as minipage "
+							 "FROM   pg_aoseg.pg_aoblkdir_%u",
+							 curr->reloid);
+				}
+				else
+				{
+					snprintf(aoquery, sizeof(aoquery),
+							 "SELECT segno, columngroup_no, first_row_no, minipage "
+							 "FROM   pg_aoseg.pg_aoblkdir_%u",
+							 curr->reloid);
+				}
+				aores = executeQueryOrDie(ctx, conn, aoquery);
+
+				curr->naoblkdirs = PQntuples(aores);
+				curr->aoblkdirs = (AOBlkDir *) pg_malloc(ctx, sizeof(AOBlkDir) * curr->naoblkdirs);
+
+				for (j = 0; j < curr->naoblkdirs; j++)
+				{
+					AOBlkDir *aoblkdir = &curr->aoblkdirs[j];
+
+					aoblkdir->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
+					aoblkdir->columngroup_no = atoi(PQgetvalue(aores, j, PQfnumber(aores, "columngroup_no")));
+					aoblkdir->first_row_no = atoll(PQgetvalue(aores, j, PQfnumber(aores, "first_row_no")));
+					aoblkdir->minipage = strdup(PQgetvalue(aores, j, PQfnumber(aores, "minipage")));
+				}
+
+				PQclear(aores);
 			}
 			else
 			{
-				snprintf(aoquery, sizeof(aoquery),
-						 "SELECT segno, columngroup_no, first_row_no, minipage "
-						 "FROM   pg_aoseg.pg_aoblkdir_%u",
-						 curr->reloid);
+				curr->aoblkdirs = NULL;
+				curr->naoblkdirs = 0;
 			}
-			aores = executeQueryOrDie(ctx, conn, aoquery);
-
-			curr->naoblkdirs = PQntuples(aores);
-			curr->aoblkdirs = (AOBlkDir *) pg_malloc(ctx, sizeof(AOBlkDir) * curr->naoblkdirs);
-
-			for (j = 0; j < curr->naoblkdirs; j++)
-			{
-				AOBlkDir *aoblkdir = &curr->aoblkdirs[j];
-
-				aoblkdir->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
-				aoblkdir->columngroup_no = atoi(PQgetvalue(aores, j, PQfnumber(aores, "columngroup_no")));
-				aoblkdir->first_row_no = atoll(PQgetvalue(aores, j, PQfnumber(aores, "first_row_no")));
-				aoblkdir->minipage = strdup(PQgetvalue(aores, j, PQfnumber(aores, "minipage")));
-			}
-
-			PQclear(aores);
 		}
 		else
 		{
