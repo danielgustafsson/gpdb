@@ -2,6 +2,8 @@
  *	aotable.c
  *
  *	functions for restoring Append-Only auxiliary tables
+ *
+ *	Copyright (c) 2016, Pivotal Software Inc
  */
 
 #include "pg_upgrade.h"

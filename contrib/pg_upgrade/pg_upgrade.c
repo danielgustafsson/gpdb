@@ -3,7 +3,8 @@
  *
  *	main source file
  *
- *	Copyright (c) 2010, PostgreSQL Global Development Group
+ *	Portions Copyright (c) 2016, Pivotal Software Inc
+ *	Portions Copyright (c) 2010, PostgreSQL Global Development Group
  *	$PostgreSQL: pgsql/contrib/pg_upgrade/pg_upgrade.c,v 1.10.2.1 2010/07/13 20:15:51 momjian Exp $
  */
 
