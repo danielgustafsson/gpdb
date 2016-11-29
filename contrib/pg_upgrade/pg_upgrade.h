@@ -96,7 +96,7 @@ typedef struct
 	int			segno;
 	int			columngroup_no;
 	int64		first_row_no;
-	char	   *minipage;		/* text representation of the "bit varying" field */
+	int64		minipage;		/* representation of the "bit varying" field */
 
 } AOBlkDir;
 

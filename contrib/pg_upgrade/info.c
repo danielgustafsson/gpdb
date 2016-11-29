@@ -634,21 +634,10 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 			
 			if (blkdirrelid != InvalidOid)
 			{
-				if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 && whichCluster == CLUSTER_OLD)
-				{
-					snprintf(aoquery, sizeof(aoquery),
-							 "SELECT segno, columngroup_no, first_row_no, "
-							 "       pg_temp.bitmaphack(minipage) as minipage "
-							 "FROM   pg_aoseg.pg_aoblkdir_%u",
-							 curr->reloid);
-				}
-				else
-				{
-					snprintf(aoquery, sizeof(aoquery),
-							 "SELECT segno, columngroup_no, first_row_no, minipage "
-							 "FROM   pg_aoseg.pg_aoblkdir_%u",
-							 curr->reloid);
-				}
+				snprintf(aoquery, sizeof(aoquery),
+						 "SELECT segno, columngroup_no, first_row_no, minipage::bit(36)::bigint "
+						 "FROM   pg_aoseg.pg_aoblkdir_%u",
+						 curr->reloid);
 				aores = executeQueryOrDie(ctx, conn, aoquery);
 
 				curr->naoblkdirs = PQntuples(aores);
@@ -661,7 +650,7 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 					aoblkdir->segno = atoi(PQgetvalue(aores, j, PQfnumber(aores, "segno")));
 					aoblkdir->columngroup_no = atoi(PQgetvalue(aores, j, PQfnumber(aores, "columngroup_no")));
 					aoblkdir->first_row_no = atoll(PQgetvalue(aores, j, PQfnumber(aores, "first_row_no")));
-					aoblkdir->minipage = strdup(PQgetvalue(aores, j, PQfnumber(aores, "minipage")));
+					aoblkdir->minipage = atoi(PQgetvalue(aores, j, PQfnumber(aores, "minipage")));
 				}
 
 				PQclear(aores);

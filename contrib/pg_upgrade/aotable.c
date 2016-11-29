@@ -107,33 +107,24 @@ restore_aosegment_table(migratorContext *ctx, PGconn *conn, RelInfo *rel)
 				 seg->segno,
 				 seg->first_row_no,
 				 visimap_escaped);
-		free(visimap_escaped);
+		PQfreemem(visimap_escaped);
 
 		PQclear(executeQueryOrDie(ctx, conn, query));
 	}
 
-	/* Restore te entries in the AO blkdir table. */
+	/* Restore the entries in the AO blkdir table. */
 	for (i = 0; i < rel->naoblkdirs; i++)
 	{
 		AOBlkDir	*seg = &rel->aoblkdirs[i];
-		char		*minipage_escaped;
-
-		if (!seg->minipage)
-			continue;
-
-		minipage_escaped = PQescapeLiteral(conn, seg->minipage, strlen(seg->minipage));
-		if (minipage_escaped == NULL)
-			pg_log(ctx, PG_FATAL, "%s: out of memory\n", ctx->progname);
 
 		snprintf(query, sizeof(query),
 				 "INSERT INTO pg_aoseg.pg_aoblkdir_%u (segno, columngroup_no, first_row_no, minipage) "
-				 " VALUES (%d, %d, " INT64_FORMAT ", %s)",
+				 " VALUES (%d, %d, " INT64_FORMAT ", " INT64_FORMAT "::bit(36))",
 				 rel->reloid,
 				 seg->segno,
 				 seg->columngroup_no,
 				 seg->first_row_no,
-				 minipage_escaped);
-		free(minipage_escaped);
+				 seg->minipage);
 
 		PQclear(executeQueryOrDie(ctx, conn, query));
 	}
