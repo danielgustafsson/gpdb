@@ -1082,9 +1082,15 @@ upgrade_tuple(AppendOnlyExecutorReadBlock *executorReadBlock,
 			 * Before PostgreSQL 8.3, the n_weight and n_sign_dscale fields
 			 * were the other way 'round. Swap them.
 			 */
-			Datum		datum = values[executorReadBlock->numericAtts[i]];
-			char	   *numericdata = VARDATA_ANY(DatumGetPointer(datum));
+			Datum		datum;
+			char	   *numericdata;
 			uint16		tmp;
+
+			if (isnull[executorReadBlock->numericAtts[i]])
+				continue;
+
+			datum = values[executorReadBlock->numericAtts[i]];
+			numericdata = VARDATA_ANY(DatumGetPointer(datum));
 
 			memcpy(&tmp, &numericdata[0], 2);
 			memcpy(&numericdata[0], &numericdata[2], 2);
