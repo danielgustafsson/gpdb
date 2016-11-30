@@ -17,6 +17,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_extprotocol.h"
@@ -56,6 +57,7 @@ Datum		preassign_relation_oid(PG_FUNCTION_ARGS);
 Datum		preassign_procedure_oid(PG_FUNCTION_ARGS);
 Datum		preassign_namespace_oid(PG_FUNCTION_ARGS);
 Datum		preassign_attrdef_oid(PG_FUNCTION_ARGS);
+Datum		preassign_constraint_oid(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(preassign_type_oid);
 PG_FUNCTION_INFO_V1(preassign_arraytype_oid);
@@ -75,6 +77,7 @@ PG_FUNCTION_INFO_V1(preassign_relation_oid);
 PG_FUNCTION_INFO_V1(preassign_procedure_oid);
 PG_FUNCTION_INFO_V1(preassign_namespace_oid);
 PG_FUNCTION_INFO_V1(preassign_attrdef_oid);
+PG_FUNCTION_INFO_V1(preassign_constraint_oid);
 
 Datum
 preassign_type_oid(PG_FUNCTION_ARGS)
@@ -354,6 +357,22 @@ preassign_attrdef_oid(PG_FUNCTION_ARGS)
 	{
 		AddPreassignedOidFromBinaryUpgrade(attdefoid, AttrDefaultRelationId, NULL,
 										   InvalidOid, attrelid, adnum);
+	}
+
+	PG_RETURN_VOID();
+}
+
+Datum
+preassign_constraint_oid(PG_FUNCTION_ARGS)
+{
+	Oid			constoid = PG_GETARG_OID(0);
+	Oid			nsoid = PG_GETARG_OID(1);
+	char	   *constname = GET_STR(PG_GETARG_TEXT_P(2));
+
+	if (Gp_role == GP_ROLE_UTILITY)
+	{
+		AddPreassignedOidFromBinaryUpgrade(constoid, ConstraintRelationId, constname,
+										   nsoid, InvalidOid, InvalidOid);
 	}
 
 	PG_RETURN_VOID();

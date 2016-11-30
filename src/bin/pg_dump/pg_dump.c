@@ -255,6 +255,9 @@ static void binary_upgrade_preassign_opfam_oid(PQExpBuffer upgrade_buffer, Oid o
 								char *objname, Oid opfnamespace);
 static void binary_upgrade_preassign_cast_oid(PQExpBuffer upgrade_buffer, Oid castoid,
 								  Oid castsource, Oid casttarget);
+static void binary_upgrade_preassign_constraint_oid(PQExpBuffer upgrade_buffer,
+										Oid constroid, Oid nsoid,
+										char *objname);
 static const char *getAttrName(int attrnum, TableInfo *tblInfo);
 static const char *fmtCopyColumnList(const TableInfo *ti);
 static void do_sql_command(PGconn *conn, const char *query);
@@ -2554,6 +2557,19 @@ binary_upgrade_set_type_oids_by_rel_oid(PQExpBuffer upgrade_buffer,
 	destroyPQExpBuffer(upgrade_query);
 
 	return toast_set;
+}
+
+static void
+binary_upgrade_preassign_constraint_oid(PQExpBuffer upgrade_buffer,
+										Oid constroid, Oid nsoid,
+										char *objname)
+{
+	appendPQExpBuffer(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_constraint oid\n");
+	appendPQExpBuffer(upgrade_buffer,
+					  "SELECT binary_upgrade.preassign_constraint_oid('%u'::pg_catalog.oid, "
+																	 "'%u'::pg_catalog.oid, "
+																	 "'%s'::text);",
+					  constroid, nsoid, objname);
 }
 
 /*
@@ -10306,6 +10322,19 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 				if (tbinfo->attrdefs[j] != NULL)
 					binary_upgrade_set_attrdefs_oid(q, tbinfo->attrdefs[j]->dobj.catId.oid,
 													tbinfo->dobj.catId.oid, tbinfo->attrdefs[j]->adnum);
+			}
+
+			/* Dump Oids for constraints */
+			for (j = 0; j < tbinfo->ncheck; j++)
+			{
+				ConstraintInfo *c = &(tbinfo->checkexprs[j]);
+
+				if (c->coninherited)
+					continue;
+
+				binary_upgrade_preassign_constraint_oid(q, c->dobj.catId.oid,
+														c->dobj.namespace->dobj.catId.oid,
+														c->dobj.name);
 			}
 		}
 
