@@ -2452,7 +2452,9 @@ binary_upgrade_set_type_oids_by_rel_oid(PQExpBuffer upgrade_buffer,
 					  "       aoblkdir.relnamespace AS aoblkdirnamespace, "
 					  "       aovisimap.reltype AS aovisimaprel, "
 					  "       aovisimap.relnamespace AS aovisimapnamespace, "
-					  "       ao.columnstore "
+					  "       ao.columnstore, "
+					  "       CASE WHEN c.relhassubclass THEN True "
+					  "       ELSE NULL END AS par_parent "
 					  "FROM pg_catalog.pg_class c "
 					  "LEFT JOIN pg_catalog.pg_class t ON "
 					  "  (c.reltoastrelid = t.oid) "
@@ -2502,6 +2504,76 @@ binary_upgrade_set_type_oids_by_rel_oid(PQExpBuffer upgrade_buffer,
 						  pg_type_toast_oid, pg_rel_oid, pg_type_toast_namespace_oid);
 
 		toast_set = true;
+	}
+
+	/*
+	 * If the table is partitioned and is the parent, we need to dump the Oids
+	 * of the child tables as well
+	 */
+	if (!PQgetisnull(upgrade_res, 0, PQfnumber(upgrade_res, "par_parent")))
+	{
+		PQExpBuffer parquery = createPQExpBuffer();
+		PGresult   *par_res;
+		int			i;
+		char		name[NAMEDATALEN];
+		Oid			part_oid;
+		Oid			conns_oid;
+		Oid			con_oid;
+		Oid			prev_oid = InvalidOid;
+
+		appendPQExpBuffer(parquery,
+						  "SELECT cc.oid, "
+						  "       p.partitiontablename AS name, "
+						  "       co.oid AS conoid, "
+						  "       co.conname, "
+						  "       co.connamespace "
+						  "FROM pg_partitions p "
+						  "JOIN pg_catalog.pg_class c ON "
+						  "  (p.tablename = c.relname AND c.oid = '%u'::pg_catalog.oid) "
+						  "JOIN pg_catalog.pg_class cc ON "
+						  "  (p.partitiontablename = cc.relname) "
+						  "LEFT JOIN pg_catalog.pg_constraint co ON "
+						  "  (cc.oid = co.conrelid);",
+						  pg_rel_oid);
+
+		par_res = PQexec(g_conn, parquery->data);
+		check_sql_result(par_res, g_conn, parquery->data, PGRES_TUPLES_OK);
+
+		if (PQntuples(par_res) > 0)
+		{
+			appendPQExpBuffer(upgrade_buffer,
+							  "\n-- For binary upgrade, must preserve Oids of "
+							  " induced child tables from partitioning\n");
+
+			for (i = 0; i < PQntuples(par_res); i++)
+			{
+				part_oid = atooid(PQgetvalue(par_res, i, PQfnumber(par_res, "oid")));
+
+				/*
+				 * Partitions with multiple constraint will be on multiple
+				 * rows so ensure to only save their Oids once.
+				 */
+				if (part_oid != prev_oid)
+				{
+					strlcpy(name, PQgetvalue(par_res, i, PQfnumber(par_res, "name")), sizeof(name));
+					binary_upgrade_set_type_oids_by_rel_oid(upgrade_buffer, part_oid, name);
+					binary_upgrade_set_pg_class_oids(upgrade_buffer, part_oid, false);
+				}
+
+				if (!PQgetisnull(par_res, i, PQfnumber(par_res, "conname")))
+				{
+					strlcpy(name, PQgetvalue(par_res, i, PQfnumber(par_res, "conname")), sizeof(name));
+					con_oid = atooid(PQgetvalue(par_res, i, PQfnumber(par_res, "conoid")));
+					conns_oid = atooid(PQgetvalue(par_res, i, PQfnumber(par_res, "connamespace")));
+
+					binary_upgrade_preassign_constraint_oid(upgrade_buffer, con_oid, conns_oid, name);
+				}
+
+				prev_oid = part_oid;
+			}
+		}
+
+		PQclear(par_res);
 	}
 
 	if (!PQgetisnull(upgrade_res, 0, PQfnumber(upgrade_res, "aosegrel")))
