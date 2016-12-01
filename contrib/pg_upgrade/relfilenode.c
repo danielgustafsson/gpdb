@@ -38,7 +38,7 @@ transfer_all_new_dbs(migratorContext *ctx, DbInfoArr *olddb_arr,
 	int			dbnum;
 	const char *msg = NULL;
 
-	prep_status(ctx, "Restoring user relation files\n");
+	prep_status(ctx, "Restoring user relation files");
 
 	for (dbnum = 0; dbnum < newdb_arr->ndbs; dbnum++)
 	{
