@@ -675,6 +675,9 @@ cleanup(migratorContext *ctx)
 	if (ctx->debug_fd)
 		fclose(ctx->debug_fd);
 
+	if (ctx->debug)
+		return;
+
 	snprintf(filename, sizeof(filename), "%s/%s", ctx->cwd, ALL_DUMP_FILE);
 	unlink(filename);
 	snprintf(filename, sizeof(filename), "%s/%s", ctx->cwd, GLOBALS_DUMP_FILE);
