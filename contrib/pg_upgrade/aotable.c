@@ -70,24 +70,6 @@ restore_aosegment_table(migratorContext *ctx, PGconn *conn, RelInfo *rel)
 		}
 
 		PQclear(executeQueryOrDie(ctx, conn, query));
-
-		/*
-		 * Also create an entry in gp_relation_node for this.
-		 *
-		 * FIXME: I have no clue what the correct values to insert would be.
-		 * But these seem to get us past the "Missing pg_aoseg entry 1 in
-		 * gp_relation_node" error that you get otherwise.
-		 */
-		snprintf(query, sizeof(query),
-				 "INSERT INTO gp_relation_node (relfilenode_oid, segment_file_num, create_mirror_data_loss_tracking_session_num, persistent_tid, persistent_serial_num) "
-				 " VALUES (%u, %d, " INT64_FORMAT ", '(%u, %u)', " INT64_FORMAT ")",
-				 rel->reloid,
-				 segno,
-				 (int64) 0,
-				 0, 0,	/* invalid TID */
-				 (int64) 0);
-
-		PQclear(executeQueryOrDie(ctx, conn, query));
 	}
 
 	/* Restore the entries in the AO visimap table. */
@@ -161,6 +143,21 @@ restore_aosegment_tables(migratorContext *ctx)
 
 		PQfinish(conn);
 	}
+
+	check_ok(ctx);
+}
+
+void
+restore_persistent_tables(migratorContext *ctx)
+{
+	PGconn	   *conn = connectToServer(ctx, "template1", CLUSTER_NEW);
+
+	prep_status(ctx, "Rebuild gp_relation_node in new cluster");
+
+	PQclear(executeQueryOrDie(ctx, conn, "checkpoint"));
+	PQclear(executeQueryOrDie(ctx, conn, "select gp_persistent_reset_all()"));
+	PQclear(executeQueryOrDie(ctx, conn, "select gp_persistent_build_all(false)"));
+	PQfinish(conn);
 
 	check_ok(ctx);
 }
