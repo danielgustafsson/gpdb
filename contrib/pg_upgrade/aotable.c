@@ -10,7 +10,7 @@
 
 /*
  * Populate contents of the AO segment, block directory, and visibility
- * map tables (pg_aoseg_<oid>), for one AO relation.
+ * map tables (pg_ao{cs}seg_<oid>), for one AO relation.
  */
 static void
 restore_aosegment_table(migratorContext *ctx, PGconn *conn, RelInfo *rel)

@@ -2,6 +2,8 @@
  *	version_old_gpdb4.c
  *
  *	GPDB-version-specific routines
+ *
+ *	Copyright (c) 2016, Pivotal Software Inc
  */
 #include "pg_upgrade.h"
 

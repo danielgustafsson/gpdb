@@ -10389,6 +10389,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		{
 			binary_upgrade_set_pg_class_oids(q, tbinfo->dobj.catId.oid, false);
 
+			/* Dump Oids for attribute defaults */
 			for (j = 0; j < tbinfo->numatts; j++)
 			{
 				if (tbinfo->attrdefs[j] != NULL)
