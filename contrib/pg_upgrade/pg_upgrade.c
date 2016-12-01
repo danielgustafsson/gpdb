@@ -477,7 +477,7 @@ copy_distributedlog(migratorContext *ctx)
 		pg_log(ctx, PG_FATAL, "Unable to delete directory %s\n", new_dlog_path);
 	check_ok(ctx);
 
-	prep_status(ctx, "Copyying old distributedlog to new server");
+	prep_status(ctx, "Copying old distributedlog to new server");
 	/* libpgport's copydir() doesn't work in FRONTEND code */
 #ifndef WIN32
 	exec_prog(ctx, true, SYSTEMQUOTE "%s \"%s\" \"%s\"" SYSTEMQUOTE,
