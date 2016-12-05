@@ -566,6 +566,7 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 					aocsseg->vpinfo = strdup(PQgetvalue(aores, j, PQfnumber(aores, "vpinfo")));
 					aocsseg->modcount = atoll(PQgetvalue(aores, j, PQfnumber(aores, "modcount")));
 					aocsseg->state = atoi(PQgetvalue(aores, j, PQfnumber(aores, "state")));
+					aocsseg->version = atoi(PQgetvalue(aores, j, PQfnumber(aores, "formatversion")));
 				}
 
 				PQclear(aores);
