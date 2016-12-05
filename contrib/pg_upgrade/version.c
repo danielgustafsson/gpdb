@@ -105,12 +105,7 @@ void
 new_gpdb5_0_invalidate_indexes(migratorContext *ctx, bool check_mode,
 							   Cluster whichCluster)
 {
-	ClusterInfo *active_cluster = (whichCluster == CLUSTER_OLD) ?
-	&ctx->old : &ctx->new;
 	int			dbnum;
-	FILE	   *script = NULL;
-	bool		found = false;
-	char		output_path[MAXPGPATH];
 
 	prep_status(ctx, "Invalidating indexes in new cluster");
 

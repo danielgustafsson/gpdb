@@ -678,7 +678,6 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 			char		hquery[QUERY_ALLOC];
 			PGresult   *hres;
 			int			j;
-			int			i_attnum;
 			int			i_attlen;
 			int			i_attalign;
 			int			i_atttypid;
@@ -697,7 +696,6 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 					 curr->reloid);
 
 			hres = executeQueryOrDie(ctx, conn, hquery);
-			i_attnum = PQfnumber(hres, "attnum");
 			i_attlen = PQfnumber(hres, "attlen");
 			i_attalign = PQfnumber(hres, "attalign");
 			i_atttypid = PQfnumber(hres, "atttypid");
@@ -709,10 +707,8 @@ get_rel_infos(migratorContext *ctx, const DbInfo *dbinfo,
 
 			for (j = 0; j < PQntuples(hres); j++)
 			{
-				int			attnum = atoi(PQgetvalue(hres, j, i_attnum));
 				Oid			typid =  atooid(PQgetvalue(hres, j, i_atttypid));
 				Oid			typbasetype =  atooid(PQgetvalue(hres, j, i_typbasetype));
-
 
 				curr->atts[j].attlen = atoi(PQgetvalue(hres, j, i_attlen));
 				curr->atts[j].attalign = PQgetvalue(hres, j, i_attalign)[0];
