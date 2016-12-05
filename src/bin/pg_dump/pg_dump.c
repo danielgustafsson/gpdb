@@ -2391,7 +2391,7 @@ binary_upgrade_set_type_oids_by_type_oid(PQExpBuffer upgrade_buffer,
 	if (ntups == 0 && g_fout->remoteVersion < 80300)
 	{
 		appendPQExpBuffer(upgrade_buffer,
-						  "\n-- XXX: No array type found for type %u, injecting InvalidOid to force new OID assignment\n",
+						  "\n-- No array type found for type %u, injecting InvalidOid to force new OID assignment\n",
 						  pg_type_oid);
 		appendPQExpBuffer(upgrade_buffer,
 						  "SELECT binary_upgrade.preassign_arraytype_oid('%u'::pg_catalog.oid, "
