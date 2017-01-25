@@ -181,6 +181,9 @@ transfer_single_new_db(migratorContext *ctx, pageCnvCtx *pageConverter,
 		snprintf(scandir_file_pattern, sizeof(scandir_file_pattern), "%u.", maps[mapnum].old);
 		numFiles = pg_scandir(ctx, maps[mapnum].old_file, &namelist, dir_matching_filenames);
 
+		pg_log(ctx, PG_INFO, "scanning for data segments in %s using pattern \"%s\" found %i files\n",
+				maps[mapnum].old_file, scandir_file_pattern, numFiles);
+
 		while (numFiles--)
 		{
 			snprintf(old_file, sizeof(old_file), "%s/%s", maps[mapnum].old_file,
