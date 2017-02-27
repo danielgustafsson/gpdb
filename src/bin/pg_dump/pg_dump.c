@@ -8988,7 +8988,7 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 
 	if (prev_ns)
 	{
-		appendPQExpBuffer(q, "-- Set the search_path required to look up the functions\n");
+		appendPQExpBufferStr(q, "-- Set the search_path required to look up the functions\n");
 		appendPQExpBuffer(q, "SET search_path = %s%s;\n\n",
 						  nsq->data, (has_internal ? ", public" : ""));
 	}
@@ -9017,7 +9017,7 @@ dumpExtProtocol(Archive *fout, ExtProtInfo *ptcinfo)
 		appendPQExpBuffer(q, " validatorfunc = '%s'",
 						  protoFuncs[VALIDFN_IDX].name);
 	}
-	appendPQExpBuffer(q, ");\n");
+	appendPQExpBufferStr(q, ");\n");
 
 	appendPQExpBuffer(delq, "DROP PROTOCOL %s;\n",
 					  fmtId(ptcinfo->dobj.name));
@@ -9643,22 +9643,21 @@ dumpExternal(TableInfo *tbinfo, PQExpBuffer query, PQExpBuffer q, PQExpBuffer de
 			{
 				/* Format properly if not first attr */
 				if (actual_atts > 0)
-					appendPQExpBuffer(q, ",");
-				appendPQExpBuffer(q, "\n    ");
+					appendPQExpBufferChar(q, ',');
+				appendPQExpBufferStr(q, "\n    ");
 
 				/* Attribute name */
-				appendPQExpBuffer(q, "%s ",
-								  fmtId(tbinfo->attnames[j]));
+				appendPQExpBufferStr(q, fmtId(tbinfo->attnames[j]));
+				appendPQExpBufferChar(q, ' ');
 
 				/* Attribute type */
-				appendPQExpBuffer(q, "%s",
-								  tbinfo->atttypnames[j]);
+				appendPQExpBufferStr(q, tbinfo->atttypnames[j]);
 
 				actual_atts++;
 			}
 		}
 
-		appendPQExpBuffer(q, "\n)");
+		appendPQExpBufferStr(q, "\n)");
 
 		if (command && strlen(command) > 0)
 		{
@@ -9782,7 +9781,7 @@ dumpExternal(TableInfo *tbinfo, PQExpBuffer query, PQExpBuffer q, PQExpBuffer de
 			/* add Single Row Error Handling clause (if any) */
 			if (rejlim && strlen(rejlim) > 0)
 			{
-				appendPQExpBuffer(q, "\n");
+				appendPQExpBufferChar(q, '\n');
 
 				/*
 				 * NOTE: error tables get automatically generated if don't
@@ -9795,11 +9794,12 @@ dumpExternal(TableInfo *tbinfo, PQExpBuffer query, PQExpBuffer q, PQExpBuffer de
 				 */
 				if (errtblname && strlen(errtblname) > 0)
 				{
-					appendPQExpBuffer(q, "LOG ERRORS ");
+					appendPQExpBufferStr(q, "LOG ERRORS ");
 					if(strcmp(fmtId(errtblname), fmtId(tbinfo->dobj.name)))
 					{
 						appendPQExpBuffer(q, "INTO %s.", fmtId(errnspname));
-						appendPQExpBuffer(q, "%s ", fmtId(errtblname));
+						appendPQExpBufferStr(q, fmtId(errtblname));
+						appendPQExpBufferChar(q, ' ');
 					}
 				}
 
@@ -9808,9 +9808,9 @@ dumpExternal(TableInfo *tbinfo, PQExpBuffer query, PQExpBuffer q, PQExpBuffer de
 
 				/* reject limit type */
 				if (rejlimtype[0] == 'r')
-					appendPQExpBuffer(q, " ROWS");
+					appendPQExpBufferStr(q, " ROWS");
 				else
-					appendPQExpBuffer(q, " PERCENT");
+					appendPQExpBufferStr(q, " PERCENT");
 			}
 		}
 
@@ -9818,7 +9818,7 @@ dumpExternal(TableInfo *tbinfo, PQExpBuffer query, PQExpBuffer q, PQExpBuffer de
 		if (iswritable)
 			addDistributedBy(q, tbinfo, actual_atts);
 
-		appendPQExpBuffer(q, ";\n");
+		appendPQExpBufferStr(q, ";\n");
 
 		PQclear(res);
 }
@@ -11924,12 +11924,12 @@ addDistributedBy(PQExpBuffer q, TableInfo *tbinfo, int actual_atts)
 				appendPQExpBuffer(q, " ,%s",
 							   fmtId(tbinfo->attnames[atoi(policycol) - 1]));
 			}
-			appendPQExpBuffer(q, ")");
+			appendPQExpBufferChar(q, ')');
 		}
 		else
 		{
 			/* policy has an empty policy - distribute randomly */
-			appendPQExpBuffer(q, " DISTRIBUTED RANDOMLY");
+			appendPQExpBufferStr(q, " DISTRIBUTED RANDOMLY");
 		}
 
 	}
