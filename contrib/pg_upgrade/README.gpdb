@@ -15,11 +15,15 @@ Extensions to upstream pg_upgrade
 
 pg_upgrade is in PostgreSQL only maintaining the Oids of types, Greenplum
 however requires all Oids to be maintained such that they are synchronized
-between QD and QEs after upgrade. The binary-upgrade option in pg_dump has
-been extended to inject Oid preservation calls for all required object types
-in the dump. Technically, the Oids needn't be preserved during upgrade as
-long as they are synchronized between QD/QEs after the upgrade. The current
-implementation preserves the Oids rather than allocate new ones.
+between QD and QEs after upgrade. The binary-upgrade option in pg_dump has been
+extended to inject Oid preservation calls for all required object types in the
+dump. Technically, the Oids needn't be preserved during upgrade as long as they
+are synchronized between QD/QEs after the upgrade. The current implementation
+preserves the Oids rather than allocate new ones. When objects require Oid
+synchronization, pg_upgrade will on the QD dump the synchronization commands in
+a special dump file called pg_upgrade_dump_oid_dispatch.sql.  This file must
+then be placed in the working directory on the QEs during upgrade to
+incorporate the Oid synchronization.
 
 Functionality for restoring the append-only catalog relations is in
 aotable.c, Greenplum specific checks for upgrading from GPDB 4 are added to
@@ -36,11 +40,8 @@ synchronization.
 
 * Each base relation type is defined as an array type in 5.0, something which
   is not supported in 4.3. The arraytypes for base relations will be created
-  during upgrade and thier Oids recorded. To be able to distribute the Oids to
-  the QEs, the upgrade will leave a dump file in the working directory named
-  pg_upgrade_dump_arraytypes.sql. If this file is placed in the working
-  directory of upgrading a QE, pg_upgrade will use it to ensure that the Oids
-  are synchronized.
+  during the upgrade process and their Oids recorded in the synchronization
+  file pg_upgrade_dump_oid_dispatch.sql.
 
 * The on-disk format of the NUMERIC data type was changed in 5.0 due to the
   merge of PostgreSQL 8.3, both heap and AO tables are affected by this. There
