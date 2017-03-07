@@ -19,7 +19,7 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
-#include "access/htup_details.h"
+#include "access/htup.h"
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
 #include "mb/pg_wchar.h"
@@ -931,7 +931,7 @@ each_worker(PG_FUNCTION_ARGS, bool as_text)
 	state->ret_tdesc = CreateTupleDescCopy(tupdesc);
 	BlessTupleDesc(state->ret_tdesc);
 	state->tuple_store =
-		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize_Random,
+		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize,
 							  false, work_mem);
 
 	MemoryContextSwitchTo(old_cxt);
@@ -1101,7 +1101,7 @@ json_array_elements(PG_FUNCTION_ARGS)
 	state->ret_tdesc = CreateTupleDescCopy(tupdesc);
 	BlessTupleDesc(state->ret_tdesc);
 	state->tuple_store =
-		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize_Random,
+		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize,
 							  false, work_mem);
 
 	MemoryContextSwitchTo(old_cxt);
@@ -1282,7 +1282,6 @@ json_populate_record(PG_FUNCTION_ARGS)
 		/* Build a temporary HeapTuple control structure */
 		tuple.t_len = HeapTupleHeaderGetDatumLength(rec);
 		ItemPointerSetInvalid(&(tuple.t_self));
-		tuple.t_tableOid = InvalidOid;
 		tuple.t_data = rec;
 	}
 
@@ -1603,7 +1602,7 @@ json_populate_recordset(PG_FUNCTION_ARGS)
 	state->ret_tdesc = CreateTupleDescCopy(tupdesc);
 	BlessTupleDesc(state->ret_tdesc);
 	state->tuple_store =
-		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize_Random,
+		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize,
 							  false, work_mem);
 
 	MemoryContextSwitchTo(old_cxt);
@@ -1732,7 +1731,6 @@ populate_recordset_object_end(void *state)
 		/* Build a temporary HeapTuple control structure */
 		tuple.t_len = HeapTupleHeaderGetDatumLength(_state->rec);
 		ItemPointerSetInvalid(&(tuple.t_self));
-		tuple.t_tableOid = InvalidOid;
 		tuple.t_data = _state->rec;
 
 		/* Break down the tuple into fields */

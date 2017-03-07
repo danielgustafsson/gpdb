@@ -160,11 +160,9 @@ lex_expect(JsonParseContext ctx, JsonLexContext *lex, JsonTokenType token)
 Datum
 json_in(PG_FUNCTION_ARGS)
 {
-=======
 	char	   *json = PG_GETARG_CSTRING(0);
 	text	   *result = cstring_to_text(json);
 	JsonLexContext *lex;
->>>>>>> a570c98... Add new JSON processing functions and parser API.
 
 	/* validate it */
 	lex = makeJsonLexContext(result, false);
