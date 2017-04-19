@@ -130,8 +130,8 @@ struct px_digest
 
 struct px_alias
 {
-	char		*alias;
-	char		*name;
+	char	   *alias;
+	char	   *name;
 };
 
 struct px_hmac

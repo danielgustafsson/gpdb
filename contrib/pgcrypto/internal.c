@@ -583,7 +583,6 @@ px_find_digest(const char *name, PX_MD **res)
 	PX_MD	   *h;
 
 	for (p = int_digest_list; p->name; p++)
-	{
 		if (pg_strcasecmp(p->name, name) == 0)
 		{
 			h = px_alloc(sizeof(*h));
@@ -593,7 +592,6 @@ px_find_digest(const char *name, PX_MD **res)
 
 			return 0;
 		}
-	}
 	return PXE_NO_HASH;
 }
 

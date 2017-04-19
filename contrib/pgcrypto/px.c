@@ -33,8 +33,6 @@
 
 #include "px.h"
 
-#include "postmaster/postmaster.h"
-
 struct error_desc
 {
 	int			err;

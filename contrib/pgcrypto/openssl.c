@@ -40,8 +40,6 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 
-#include "postmaster/postmaster.h"
-
 /*
  * Max lengths we might want to handle.
  */
@@ -257,7 +255,6 @@ digest_free(PX_MD *h)
 	px_free(digest);
 	px_free(h);
 }
-
 
 static int	px_openssl_initialized = 0;
 
@@ -863,7 +860,7 @@ static PX_Alias ossl_aliases[] = {
 	{"rijndael", "aes-cbc"},
 	{"rijndael-cbc", "aes-cbc"},
 	{"rijndael-ecb", "aes-ecb"},
-	{NULL, NULL}
+	{NULL}
 };
 
 static const struct ossl_cipher ossl_bf_cbc = {
@@ -955,11 +952,9 @@ px_find_cipher(const char *name, PX_Cipher **res)
 	ossldata   *od;
 
 	name = px_resolve_alias(ossl_aliases, name);
-
 	for (i = ossl_cipher_types; i->name; i++)
 		if (!strcmp(i->name, name))
 			break;
-
 	if (i->name == NULL)
 		return PXE_NO_CIPHER;
 
