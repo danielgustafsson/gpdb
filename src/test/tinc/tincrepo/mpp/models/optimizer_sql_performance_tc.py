@@ -256,3 +256,26 @@ class OptStackFrame(object):
 
     def __str__(self):
         return self.text
+
+class OptimizerTestResult(_SQLTestCaseResult):
+    """
+    A listener for OptimizerSQLTestCase that will collect mini dumps when a test case fails
+    """
+
+    def addFailure(self, test, err):
+        """
+        Collect mini dumps for test queries during a failure
+        """
+        dxl_file = test._collect_mini_dump()
+        super(OptimizerTestResult, self).addFailure(test, err)
+
+    def _get_stack_info(self, dxl_file, stack_frames):
+        stack = OptStacktrace.parse(type = 'dxl', dxl = dxl_file)
+        stack_hash = ''
+        stack_trace = ''
+        stack_owner = ''
+        if stack is not None:
+            stack_hash = stack.get_thread(0).hash(stack_frames)
+            stack_trace = stack.get_thread(0).text
+        return (stack_trace, stack_hash)
+
