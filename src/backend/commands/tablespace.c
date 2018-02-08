@@ -244,7 +244,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	bool		nulls[Natts_pg_tablespace];
 	HeapTuple	tuple;
 	Oid			tablespaceoid;
-	char	   *location;
+	char	   *location = NULL;
 	Oid			ownerId;
 
 	/* Must be super user */
@@ -261,8 +261,43 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	else
 		ownerId = GetUserId();
 
+	/* If we have segment-level overrides */
+	if (list_length(stmt->options) > 0)
+	{
+		ListCell   *option;
+
+		foreach(option, stmt->options)
+		{
+			DefElem	   *defel = (DefElem *) lfirst(option);
+
+			/* Segment ID specific locations */
+			if (strncmp(defel->defname, "segment", strlen("segment")) == 0)
+			{
+				if (pg_atoi(defel->defname + strlen("segment"), sizeof(int16), 0) == Gp_segment)
+				{
+					location = pstrdup(strVal(defel->arg));
+					break;
+				}
+			}
+			else if (strncmp(defel->defname, "dbid", strlen("dbid")) == 0)
+			{
+				if (pg_atoi(defel->defname + strlen("dbid"), sizeof(int16), 0) == GpIdentity.dbid)
+				{
+					location = pstrdup(strVal(defel->arg));
+					break;
+				}
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid segment or dbid specification")));
+		}
+	}
+
+	if (!location)
+		location = pstrdup(stmt->location);
+
 	/* Unix-ify the offered path, and strip any trailing slashes */
-	location = pstrdup(stmt->location);
 	canonicalize_path(location);
 
 	/* disallow quotes, else CREATE DATABASE would be at risk */
