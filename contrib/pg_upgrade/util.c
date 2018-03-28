@@ -3,14 +3,18 @@
  *
  *	utility functions
  *
- *	Copyright (c) 2010, PostgreSQL Global Development Group
- *	$PostgreSQL: pgsql/contrib/pg_upgrade/util.c,v 1.5 2010/07/06 19:18:55 momjian Exp $
+ *	Copyright (c) 2010-2013, PostgreSQL Global Development Group
+ *	contrib/pg_upgrade/util.c
  */
+
+#include "postgres_fe.h"
 
 #include "pg_upgrade.h"
 
 #include <signal.h>
 
+
+LogOpts		log_opts;
 
 /*
  * report_status()
@@ -18,7 +22,7 @@
  *	Displays the result of an operation (ok, failed, error message,...)
  */
 void
-report_status(migratorContext *ctx, eLogType type, const char *fmt,...)
+report_status(eLogType type, const char *fmt,...)
 {
 	va_list		args;
 	char		message[MAX_STRING];
@@ -27,27 +31,39 @@ report_status(migratorContext *ctx, eLogType type, const char *fmt,...)
 	vsnprintf(message, sizeof(message), fmt, args);
 	va_end(args);
 
-	pg_log(ctx, type, "%s\n", message);
+	pg_log(type, "%s\n", message);
+}
+
+
+/* force blank output for progress display */
+void
+end_progress_output(void)
+{
+	/*
+	 * In case nothing printed; pass a space so gcc doesn't complain about
+	 * empty format string.
+	 */
+	prep_status(" ");
 }
 
 
 /*
- * prep_status(&ctx, )
+ * prep_status
  *
  *	Displays a message that describes an operation we are about to begin.
  *	We pad the message out to MESSAGE_WIDTH characters so that all of the "ok" and
  *	"failed" indicators line up nicely.
  *
  *	A typical sequence would look like this:
- *		prep_status(&ctx,  "about to flarb the next %d files", fileCount );
+ *		prep_status("about to flarb the next %d files", fileCount );
  *
  *		if(( message = flarbFiles(fileCount)) == NULL)
- *		  report_status(ctx, PG_REPORT, "ok" );
+ *		  report_status(PG_REPORT, "ok" );
  *		else
- *		  pg_log(ctx, PG_FATAL, "failed - %s", message );
+ *		  pg_log(PG_FATAL, "failed - %s\n", message );
  */
 void
-prep_status(migratorContext *ctx, const char *fmt,...)
+prep_status(const char *fmt,...)
 {
 	va_list		args;
 	char		message[MAX_STRING];
@@ -57,14 +73,15 @@ prep_status(migratorContext *ctx, const char *fmt,...)
 	va_end(args);
 
 	if (strlen(message) > 0 && message[strlen(message) - 1] == '\n')
-		pg_log(ctx, PG_REPORT, "%s", message);
+		pg_log(PG_REPORT, "%s", message);
 	else
-		pg_log(ctx, PG_REPORT, "%-" MESSAGE_WIDTH "s", message);
+		/* trim strings that don't end in a newline */
+		pg_log(PG_REPORT, "%-*s", MESSAGE_WIDTH, message);
 }
 
 
 void
-pg_log(migratorContext *ctx, eLogType type, char *fmt,...)
+pg_log(eLogType type, char *fmt,...)
 {
 	va_list		args;
 	char		message[MAX_STRING];
@@ -73,20 +90,39 @@ pg_log(migratorContext *ctx, eLogType type, char *fmt,...)
 	vsnprintf(message, sizeof(message), fmt, args);
 	va_end(args);
 
-	if (ctx->log_fd != NULL)
+	/* PG_VERBOSE and PG_STATUS are only output in verbose mode */
+	/* fopen() on log_opts.internal might have failed, so check it */
+	if (((type != PG_VERBOSE && type != PG_STATUS) || log_opts.verbose) &&
+		log_opts.internal != NULL)
 	{
-		fwrite(message, strlen(message), 1, ctx->log_fd);
-		/* if we are using OVERWRITE_MESSAGE, add newline */
-		if (strchr(message, '\r') != NULL)
-			fwrite("\n", 1, 1, ctx->log_fd);
-		fflush(ctx->log_fd);
+		if (type == PG_STATUS)
+			/* status messages need two leading spaces and a newline */
+			fprintf(log_opts.internal, "  %s\n", message);
+		else
+			fprintf(log_opts.internal, "%s", message);
+		fflush(log_opts.internal);
 	}
 
 	switch (type)
 	{
-		case PG_INFO:
-			if (ctx->verbose)
+		case PG_VERBOSE:
+			if (log_opts.verbose)
 				printf("%s", _(message));
+			break;
+
+		case PG_STATUS:
+			/* for output to a display, do leading truncation and append \r */
+			if (isatty(fileno(stdout)))
+				/* -2 because we use a 2-space indent */
+				printf("  %s%-*.*s\r",
+				/* prefix with "..." if we do leading truncation */
+					   strlen(message) <= MESSAGE_WIDTH - 2 ? "" : "...",
+					   MESSAGE_WIDTH - 2, MESSAGE_WIDTH - 2,
+				/* optional leading truncation */
+					   strlen(message) <= MESSAGE_WIDTH - 2 ? message :
+					   message + strlen(message) - MESSAGE_WIDTH + 3 + 2);
+			else
+				printf("  %s\n", _(message));
 			break;
 
 		case PG_REPORT:
@@ -95,14 +131,9 @@ pg_log(migratorContext *ctx, eLogType type, char *fmt,...)
 			break;
 
 		case PG_FATAL:
-			printf("%s", "\n");
-			printf("%s", _(message));
-			exit_nicely(ctx, true);
-			break;
-
-		case PG_DEBUG:
-			if (ctx->debug)
-				fprintf(ctx->debug_fd, "%s\n", _(message));
+			printf("\n%s", _(message));
+			printf("Failure, exiting\n");
+			exit(1);
 			break;
 
 		default:
@@ -113,10 +144,10 @@ pg_log(migratorContext *ctx, eLogType type, char *fmt,...)
 
 
 void
-check_ok(migratorContext *ctx)
+check_ok(void)
 {
 	/* all seems well */
-	report_status(ctx, PG_REPORT, "ok");
+	report_status(PG_REPORT, "ok");
 	fflush(stdout);
 }
 
@@ -129,9 +160,9 @@ check_ok(migratorContext *ctx)
  * memory leakage is not a big deal in this program.
  */
 char *
-quote_identifier(migratorContext *ctx, const char *s)
+quote_identifier(const char *s)
 {
-	char	   *result = pg_malloc(ctx, strlen(s) * 2 + 3);
+	char	   *result = pg_malloc(strlen(s) * 2 + 3);
 	char	   *r = result;
 
 	*r++ = '"';
@@ -150,11 +181,215 @@ quote_identifier(migratorContext *ctx, const char *s)
 
 
 /*
+ * Append the given string to the shell command being built in the buffer,
+ * with suitable shell-style quoting to create exactly one argument.
+ *
+ * Forbid LF or CR characters, which have scant practical use beyond designing
+ * security breaches.  The Windows command shell is unusable as a conduit for
+ * arguments containing LF or CR characters.  A future major release should
+ * reject those characters in CREATE ROLE and CREATE DATABASE, because use
+ * there eventually leads to errors here.
+ */
+void
+appendShellString(PQExpBuffer buf, const char *str)
+{
+	const char *p;
+
+#ifndef WIN32
+	appendPQExpBufferChar(buf, '\'');
+	for (p = str; *p; p++)
+	{
+		if (*p == '\n' || *p == '\r')
+		{
+			fprintf(stderr,
+					_("shell command argument contains a newline or carriage return: \"%s\"\n"),
+					str);
+			exit(EXIT_FAILURE);
+		}
+
+		if (*p == '\'')
+			appendPQExpBufferStr(buf, "'\"'\"'");
+		else
+			appendPQExpBufferChar(buf, *p);
+	}
+	appendPQExpBufferChar(buf, '\'');
+#else							/* WIN32 */
+	int			backslash_run_length = 0;
+
+	/*
+	 * A Windows system() argument experiences two layers of interpretation.
+	 * First, cmd.exe interprets the string.  Its behavior is undocumented,
+	 * but a caret escapes any byte except LF or CR that would otherwise have
+	 * special meaning.  Handling of a caret before LF or CR differs between
+	 * "cmd.exe /c" and other modes, and it is unusable here.
+	 *
+	 * Second, the new process parses its command line to construct argv (see
+	 * https://msdn.microsoft.com/en-us/library/17w5ykft.aspx).  This treats
+	 * backslash-double quote sequences specially.
+	 */
+	appendPQExpBufferStr(buf, "^\"");
+	for (p = str; *p; p++)
+	{
+		if (*p == '\n' || *p == '\r')
+		{
+			fprintf(stderr,
+					_("shell command argument contains a newline or carriage return: \"%s\"\n"),
+					str);
+			exit(EXIT_FAILURE);
+		}
+
+		/* Change N backslashes before a double quote to 2N+1 backslashes. */
+		if (*p == '"')
+		{
+			while (backslash_run_length)
+			{
+				appendPQExpBufferStr(buf, "^\\");
+				backslash_run_length--;
+			}
+			appendPQExpBufferStr(buf, "^\\");
+		}
+		else if (*p == '\\')
+			backslash_run_length++;
+		else
+			backslash_run_length = 0;
+
+		/*
+		 * Decline to caret-escape the most mundane characters, to ease
+		 * debugging and lest we approach the command length limit.
+		 */
+		if (!((*p >= 'a' && *p <= 'z') ||
+			  (*p >= 'A' && *p <= 'Z') ||
+			  (*p >= '0' && *p <= '9')))
+			appendPQExpBufferChar(buf, '^');
+		appendPQExpBufferChar(buf, *p);
+	}
+
+	/*
+	 * Change N backslashes at end of argument to 2N backslashes, because they
+	 * precede the double quote that terminates the argument.
+	 */
+	while (backslash_run_length)
+	{
+		appendPQExpBufferStr(buf, "^\\");
+		backslash_run_length--;
+	}
+	appendPQExpBufferStr(buf, "^\"");
+#endif   /* WIN32 */
+}
+
+
+/*
+ * Append the given string to the buffer, with suitable quoting for passing
+ * the string as a value, in a keyword/pair value in a libpq connection
+ * string
+ */
+void
+appendConnStrVal(PQExpBuffer buf, const char *str)
+{
+	const char *s;
+	bool		needquotes;
+
+	/*
+	 * If the string is one or more plain ASCII characters, no need to quote
+	 * it. This is quite conservative, but better safe than sorry.
+	 */
+	needquotes = true;
+	for (s = str; *s; s++)
+	{
+		if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
+			  (*s >= '0' && *s <= '9') || *s == '_' || *s == '.'))
+		{
+			needquotes = true;
+			break;
+		}
+		needquotes = false;
+	}
+
+	if (needquotes)
+	{
+		appendPQExpBufferChar(buf, '\'');
+		while (*str)
+		{
+			/* ' and \ must be escaped by to \' and \\ */
+			if (*str == '\'' || *str == '\\')
+				appendPQExpBufferChar(buf, '\\');
+
+			appendPQExpBufferChar(buf, *str);
+			str++;
+		}
+		appendPQExpBufferChar(buf, '\'');
+	}
+	else
+		appendPQExpBufferStr(buf, str);
+}
+
+
+/*
+ * Append a psql meta-command that connects to the given database with the
+ * then-current connection's user, host and port.
+ */
+void
+appendPsqlMetaConnect(PQExpBuffer buf, const char *dbname)
+{
+	const char *s;
+	bool		complex;
+
+	/*
+	 * If the name is plain ASCII characters, emit a trivial "\connect "foo"".
+	 * For other names, even many not technically requiring it, skip to the
+	 * general case.  No database has a zero-length name.
+	 */
+	complex = false;
+	for (s = dbname; *s; s++)
+	{
+		if (*s == '\n' || *s == '\r')
+		{
+			fprintf(stderr,
+					_("database name contains a newline or carriage return: \"%s\"\n"),
+					dbname);
+			exit(EXIT_FAILURE);
+		}
+
+		if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
+			  (*s >= '0' && *s <= '9') || *s == '_' || *s == '.'))
+		{
+			complex = true;
+		}
+	}
+
+	appendPQExpBufferStr(buf, "\\connect ");
+	if (complex)
+	{
+		PQExpBufferData connstr;
+
+		initPQExpBuffer(&connstr);
+		appendPQExpBuffer(&connstr, "dbname=");
+		appendConnStrVal(&connstr, dbname);
+
+		appendPQExpBuffer(buf, "-reuse-previous=on ");
+
+		/*
+		 * As long as the name does not contain a newline, SQL identifier
+		 * quoting satisfies the psql meta-command parser.  Prefer not to
+		 * involve psql-interpreted single quotes, which behaved differently
+		 * before PostgreSQL 9.2.
+		 */
+		appendPQExpBufferStr(buf, quote_identifier(connstr.data));
+
+		termPQExpBuffer(&connstr);
+	}
+	else
+		appendPQExpBufferStr(buf, quote_identifier(dbname));
+	appendPQExpBufferChar(buf, '\n');
+}
+
+
+/*
  * get_user_info()
  * (copied from initdb.c) find the current user
  */
 int
-get_user_info(migratorContext *ctx, char **user_name)
+get_user_info(char **user_name)
 {
 	int			user_id;
 
@@ -176,72 +411,9 @@ get_user_info(migratorContext *ctx, char **user_name)
 	user_id = 1;
 #endif
 
-	*user_name = pg_strdup(ctx, pw->pw_name);
+	*user_name = pg_strdup(pw->pw_name);
 
 	return user_id;
-}
-
-
-void
-exit_nicely(migratorContext *ctx, bool need_cleanup)
-{
-	close_progress(ctx);
-
-	stop_postmaster(ctx, true, true);
-
-	pg_free(ctx->logfile);
-
-	if (ctx->log_fd)
-		fclose(ctx->log_fd);
-
-	if (ctx->debug_fd)
-		fclose(ctx->debug_fd);
-
-	/* terminate any running instance of postmaster */
-	if (ctx->postmasterPID != 0)
-		kill(ctx->postmasterPID, SIGTERM);
-
-	if (need_cleanup)
-	{
-		/*
-		 * FIXME must delete intermediate files
-		 */
-		exit(1);
-	}
-	else
-		exit(0);
-}
-
-
-void *
-pg_malloc(migratorContext *ctx, int n)
-{
-	void	   *p = malloc(n);
-
-	if (p == NULL)
-		pg_log(ctx, PG_FATAL, "%s: out of memory\n", ctx->progname);
-
-	return p;
-}
-
-
-void
-pg_free(void *p)
-{
-	if (p != NULL)
-		free(p);
-}
-
-
-char *
-pg_strdup(migratorContext *ctx, const char *s)
-{
-	char	   *result = strdup(s);
-
-	if (result == NULL)
-		pg_log(ctx, PG_FATAL, "%s: out of memory\n", ctx->progname);
-
-	return result;
 }
 
 
@@ -258,8 +430,10 @@ getErrorText(int errNum)
 {
 #ifdef WIN32
 	_dosmaperr(GetLastError());
+	/* _dosmaperr sets errno, so we copy errno here */
+	errNum = errno;
 #endif
-	return strdup(strerror(errNum));
+	return pg_strdup(strerror(errNum));
 }
 
 
@@ -272,4 +446,41 @@ unsigned int
 str2uint(const char *str)
 {
 	return strtoul(str, NULL, 10);
+}
+
+
+/*
+ *	pg_putenv()
+ *
+ *	This is like putenv(), but takes two arguments.
+ *	It also does unsetenv() if val is NULL.
+ */
+void
+pg_putenv(const char *var, const char *val)
+{
+	if (val)
+	{
+#ifndef WIN32
+		char	   *envstr = (char *) pg_malloc(strlen(var) +
+												strlen(val) + 2);
+
+		sprintf(envstr, "%s=%s", var, val);
+		putenv(envstr);
+
+		/*
+		 * Do not free envstr because it becomes part of the environment on
+		 * some operating systems.  See port/unsetenv.c::unsetenv.
+		 */
+#else
+		SetEnvironmentVariableA(var, val);
+#endif
+	}
+	else
+	{
+#ifndef WIN32
+		unsetenv(var);
+#else
+		SetEnvironmentVariableA(var, "");
+#endif
+	}
 }
