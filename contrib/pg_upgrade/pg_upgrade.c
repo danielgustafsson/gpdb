@@ -4,6 +4,7 @@
  *	main source file
  *
  *	Copyright (c) 2010-2013, PostgreSQL Global Development Group
+ *	Portions Copyright (c) 2016-Present, Pivotal Software Inc
  *	contrib/pg_upgrade/pg_upgrade.c
  */
 
@@ -94,7 +95,8 @@ main(int argc, char **argv)
 	adjust_data_dir(&new_cluster);
 
 	setup(argv[0], &live_check);
-
+	
+	report_progress(NULL, CHECK, "Checking cluster compatibility");
 	output_check_banner(live_check);
 
 	check_cluster_versions();
@@ -125,6 +127,7 @@ main(int argc, char **argv)
 	 */
 
 	copy_clog_xlog_xid();
+	copy_distributedlog();
 
 	/* New now using xids of the old system */
 
@@ -157,7 +160,7 @@ main(int argc, char **argv)
 	 */
 	prep_status("Setting next OID for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
-			  "\"%s/pg_resetxlog\" -o %u \"%s\"",
+			  "\"%s/pg_resetxlog\" -y -o %u \"%s\"",
 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtoid,
 			  new_cluster.pgdata);
 	check_ok();
@@ -175,6 +178,9 @@ main(int argc, char **argv)
 
 	pg_log(PG_REPORT, "\nUpgrade Complete\n");
 	pg_log(PG_REPORT, "----------------\n");
+
+	report_progress(NULL, DONE, "Upgrade complete");
+	close_progress();
 
 	output_completion_banner(analyze_script_file_name,
 							 deletion_script_file_name);
@@ -412,7 +418,7 @@ prepare_new_cluster(void)
 	 */
 	prep_status("Analyzing all rows in the new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
-			  "\"%s/vacuumdb\" %s --all --analyze %s",
+			  "PGOPTIONS='-c gp_session_role=utility' \"%s/vacuumdb\" %s --all --analyze %s",
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  log_opts.verbose ? "--verbose" : "");
 	check_ok();
@@ -425,6 +431,7 @@ prepare_new_cluster(void)
 	 */
 	prep_status("Freezing all rows on the new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
+			  "PGOPTIONS='-c gp_session_role=utility' "
 			  "\"%s/vacuumdb\" %s --all --freeze %s",
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  log_opts.verbose ? "--verbose" : "");
@@ -461,7 +468,14 @@ prepare_new_databases(void)
 	 * support functions in template1 but pg_dumpall creates database using
 	 * the template0 template.
 	 */
+	if (!user_opts.dispatcher_mode)
+		exec_prog(UTILITY_LOG_FILE, NULL, true,
+				  "PGOPTIONS='-c gp_session_role=utility' "
+				  "\"%s/psql\" " EXEC_PSQL_ARGS " %s -f \"%s\"",
+				  new_cluster.bindir, cluster_conn_opts(&new_cluster),
+				  GLOBALS_OIDS_DUMP_FILE);
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
+			  "PGOPTIONS='-c gp_session_role=utility' "
 			  "\"%s/psql\" " EXEC_PSQL_ARGS " %s -f \"%s\"",
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  GLOBALS_DUMP_FILE);
@@ -500,6 +514,7 @@ create_new_objects(void)
 	{
 		char		sql_file_name[MAXPGPATH],
 					log_file_name[MAXPGPATH];
+		char		oid_file_name[MAXPGPATH];
 		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
 		PQExpBufferData connstr,
 					escaped_connstr;
@@ -516,11 +531,23 @@ create_new_objects(void)
 		snprintf(log_file_name, sizeof(log_file_name), DB_DUMP_LOG_FILE_MASK, old_db->db_oid);
 
 		/*
+		 * Before restoring the schema we import the Oid preassignments that
+		 * were collected
+		 */
+		snprintf(oid_file_name, sizeof(oid_file_name), DB_OIDS_DUMP_FILE_MASK, old_db->db_oid);
+		exec_prog(log_file_name, NULL, true,
+				  "PGOPTIONS='-c gp_session_role=utility' "
+				  "\"%s/psql\" " EXEC_PSQL_ARGS " %s  --dbname %s -f \"%s\"",
+				  new_cluster.bindir,cluster_conn_opts(&new_cluster),
+				  escaped_connstr.data, oid_file_name);
+
+		/*
 		 * pg_dump only produces its output at the end, so there is little
 		 * parallelism if using the pipe.
 		 */
 		parallel_exec_prog(log_file_name,
 						   NULL,
+		 "PGOPTIONS='-c gp_session_role=utility' "
 		 "\"%s/pg_restore\" %s --exit-on-error --verbose --dbname %s \"%s\"",
 						   new_cluster.bindir,
 						   cluster_conn_opts(&new_cluster),
@@ -537,6 +564,8 @@ create_new_objects(void)
 	end_progress_output();
 	check_ok();
 
+	restore_aosegment_tables();
+
 	/*
 	 * We don't have minmxids for databases or relations in pre-9.3
 	 * clusters, so set those after we have restored the schema.
@@ -548,6 +577,26 @@ create_new_objects(void)
 	get_db_and_rel_infos(&new_cluster);
 
 	uninstall_support_functions_from_new_cluster();
+
+	/*
+	 * If we're upgrading from GPDB4, mark all indexes as invalid.
+	 * The page format is incompatible, and while convert heap
+	 * and AO tables automatically, we don't have similar code for
+	 * indexes. Also, the heap conversion relocates tuples, so
+	 * any indexes on heaps would need to be rebuilt for that
+	 * reason, anyway.
+	 */
+	if (GET_MAJOR_VERSION(old_cluster.major_version) == 802)
+		new_gpdb5_0_invalidate_indexes();
+	else
+	{
+		/* TODO: Bitmap indexes are not supported, so mark them as invalid. */
+		new_gpdb_invalidate_bitmap_indexes();
+	}
+
+	/* Before shutting down the cluster, dump all OIDs, if this was the QD node */
+	if (user_opts.dispatcher_mode)
+		dump_new_oids();
 }
 
 /*
@@ -604,15 +653,17 @@ copy_clog_xlog_xid(void)
 	/* set the next transaction id and epoch of the new cluster */
 	prep_status("Setting next transaction ID and epoch for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
-			  "\"%s/pg_resetxlog\" -f -x %u \"%s\"",
+			  "\"%s/pg_resetxlog\" -y -f -x %u \"%s\"",
 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtxid,
 			  new_cluster.pgdata);
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
-			  "\"%s/pg_resetxlog\" -f -e %u \"%s\"",
+			  "\"%s/pg_resetxlog\" -y -f -e %u \"%s\"",
 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtepoch,
 			  new_cluster.pgdata);
 	check_ok();
 
+/* GPDB_93_MERGE_FIXME */
+#if 0
 	/*
 	 * If the old server is before the MULTIXACT_FORMATCHANGE_CAT_VER change
 	 * (see pg_upgrade.h) and the new server is after, then we don't copy
@@ -632,7 +683,7 @@ copy_clog_xlog_xid(void)
 		 * counters here and the oldest multi present on system.
 		 */
 		exec_prog(UTILITY_LOG_FILE, NULL, true,
-				  "\"%s/pg_resetxlog\" -O %u -m %u,%u \"%s\"",
+				  "\"%s/pg_resetxlog\" -y -O %u -m %u,%u \"%s\"",
 				  new_cluster.bindir,
 				  old_cluster.controldata.chkpnt_nxtmxoff,
 				  old_cluster.controldata.chkpnt_nxtmulti,
@@ -660,20 +711,21 @@ copy_clog_xlog_xid(void)
 		 * next=MaxMultiXactId, but multixact.c can cope with that just fine.
 		 */
 		exec_prog(UTILITY_LOG_FILE, NULL, true,
-				  "\"%s/pg_resetxlog\" -m %u,%u \"%s\"",
+				  "\"%s/pg_resetxlog\" -y -m %u,%u \"%s\"",
 				  new_cluster.bindir,
 				  old_cluster.controldata.chkpnt_nxtmulti + 1,
 				  old_cluster.controldata.chkpnt_nxtmulti,
 				  new_cluster.pgdata);
 		check_ok();
 	}
+#endif
 
 	/* now reset the wal archives in the new cluster */
 	prep_status("Resetting WAL archives");
 	exec_prog(UTILITY_LOG_FILE, NULL, true,
 			  /* use timeline 1 to match controldata and no WAL history file */
-			  "\"%s/pg_resetxlog\" -l 00000001%s \"%s\"", new_cluster.bindir,
-			  old_cluster.controldata.nextxlogfile + 8,
+			  "\"%s/pg_resetxlog\" -y -l 1,%u,%u \"%s\"", new_cluster.bindir,
+			  old_cluster.controldata.logid, old_cluster.controldata.nxtlogseg,
 			  new_cluster.pgdata);
 	check_ok();
 }
@@ -718,18 +770,27 @@ set_frozenxids(bool minmxid_only)
 
 	conn_template1 = connectToServer(&new_cluster, "template1");
 
+	/*
+	 * GPDB doesn't allow hacking the catalogs without setting
+	 * allow_system_table_mods first.
+	 */
+	PQclear(executeQueryOrDie(conn_template1,
+							  "set allow_system_table_mods='dml'"));
+
 	if (!minmxid_only)
 		/* set pg_database.datfrozenxid */
 		PQclear(executeQueryOrDie(conn_template1,
 								  "UPDATE pg_catalog.pg_database "
 								  "SET	datfrozenxid = '%u'",
 								  old_cluster.controldata.chkpnt_nxtxid));
-
+/* GPDB_93_MERGE_FIXME */
+#if 0
 	/* set pg_database.datminmxid */
 	PQclear(executeQueryOrDie(conn_template1,
 							  "UPDATE pg_catalog.pg_database "
 							  "SET	datminmxid = '%u'",
 							  old_cluster.controldata.chkpnt_nxtmulti));
+#endif
 
 	/* get database names */
 	dbres = executeQueryOrDie(conn_template1,
@@ -760,6 +821,13 @@ set_frozenxids(bool minmxid_only)
 
 		conn = connectToServer(&new_cluster, datname);
 
+		/*
+		 * GPDB doesn't allow hacking the catalogs without setting
+		 * allow_system_table_mods first.
+		 */
+		PQclear(executeQueryOrDie(conn, "set allow_system_table_mods='dml'"));
+
+
 		if (!minmxid_only)
 			/* set pg_class.relfrozenxid */
 			PQclear(executeQueryOrDie(conn,
@@ -769,6 +837,8 @@ set_frozenxids(bool minmxid_only)
 									  "WHERE	relkind IN ('r', 'm', 't')",
 									  old_cluster.controldata.chkpnt_nxtxid));
 
+/* GPDB_93_MERGE_FIXME */
+#if 0
 		/* set pg_class.relminmxid */
 		PQclear(executeQueryOrDie(conn,
 								  "UPDATE	pg_catalog.pg_class "
@@ -776,6 +846,8 @@ set_frozenxids(bool minmxid_only)
 		/* only heap, materialized view, and TOAST are vacuumed */
 								  "WHERE	relkind IN ('r', 'm', 't')",
 								  old_cluster.controldata.chkpnt_nxtmulti));
+#endif
+
 		PQfinish(conn);
 
 		/* Reset datallowconn flag */
