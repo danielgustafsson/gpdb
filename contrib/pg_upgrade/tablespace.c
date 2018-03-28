@@ -3,29 +3,32 @@
  *
  *	tablespace functions
  *
- *	Copyright (c) 2010, PostgreSQL Global Development Group
- *	$PostgreSQL: pgsql/contrib/pg_upgrade/tablespace.c,v 1.6 2010/07/06 19:18:55 momjian Exp $
+ *	Copyright (c) 2010-2013, PostgreSQL Global Development Group
+ *	contrib/pg_upgrade/tablespace.c
  */
+
+#include "postgres_fe.h"
 
 #include "pg_upgrade.h"
 
-static void get_tablespace_paths(migratorContext *ctx);
-static void set_tablespace_directory_suffix(migratorContext *ctx,
-								Cluster whichCluster);
+#include <sys/types.h>
+
+static void get_tablespace_paths(void);
+static void set_tablespace_directory_suffix(ClusterInfo *cluster);
 
 
 void
-init_tablespaces(migratorContext *ctx)
+init_tablespaces(void)
 {
-	get_tablespace_paths(ctx);
+	get_tablespace_paths();
 
-	set_tablespace_directory_suffix(ctx, CLUSTER_OLD);
-	set_tablespace_directory_suffix(ctx, CLUSTER_NEW);
+	set_tablespace_directory_suffix(&old_cluster);
+	set_tablespace_directory_suffix(&new_cluster);
 
-	if (ctx->num_tablespaces > 0 &&
-		strcmp(ctx->old.tablespace_suffix, ctx->new.tablespace_suffix) == 0)
-		pg_log(ctx, PG_FATAL,
-			   "Cannot migrate to/from the same system catalog version when\n"
+	if (os_info.num_old_tablespaces > 0 &&
+	strcmp(old_cluster.tablespace_suffix, new_cluster.tablespace_suffix) == 0)
+		pg_log(PG_FATAL,
+			   "Cannot upgrade to/from the same system catalog version when\n"
 			   "using tablespaces.\n");
 }
 
@@ -37,13 +40,12 @@ init_tablespaces(migratorContext *ctx)
  * paths. Its the caller's responsibility to free the array.
  */
 static void
-get_tablespace_paths(migratorContext *ctx)
+get_tablespace_paths(void)
 {
-	PGconn	   *conn = connectToServer(ctx, "template1", CLUSTER_OLD);
+	PGconn	   *conn = connectToServer(&old_cluster, "template1");
 	PGresult   *res;
 	int			tblnum;
 	int			i_spclocation;
-
 	char		query[QUERY_ALLOC];
 
 	snprintf(query, sizeof(query),
@@ -55,22 +57,52 @@ get_tablespace_paths(migratorContext *ctx)
 	 * 9.2 removed the spclocation column in upstream postgres, in GPDB it was
 	 * removed in 6.0.0 during the 8.4 merge
 	 */
-			(GET_MAJOR_VERSION(ctx->old.major_version) <= 803) ?
-			"spclocation" : "pg_catalog.pg_tablespace_location(oid) AS spclocation");
+			 (GET_MAJOR_VERSION(old_cluster.major_version) <= 803) ?
+	"spclocation" : "pg_catalog.pg_tablespace_location(oid) AS spclocation");
 
-	res = executeQueryOrDie(ctx, conn, "%s", query);
+	res = executeQueryOrDie(conn, "%s", query);
 
-	if ((ctx->num_tablespaces = PQntuples(res)) != 0)
-		ctx->tablespaces = (char **) pg_malloc(ctx,
-									  ctx->num_tablespaces * sizeof(char *));
+	if ((os_info.num_old_tablespaces = PQntuples(res)) != 0)
+		os_info.old_tablespaces = (char **) pg_malloc(
+							   os_info.num_old_tablespaces * sizeof(char *));
 	else
-		ctx->tablespaces = NULL;
+		os_info.old_tablespaces = NULL;
 
 	i_spclocation = PQfnumber(res, "spclocation");
 
-	for (tblnum = 0; tblnum < ctx->num_tablespaces; tblnum++)
-		ctx->tablespaces[tblnum] = pg_strdup(ctx,
+	for (tblnum = 0; tblnum < os_info.num_old_tablespaces; tblnum++)
+	{
+		struct stat statBuf;
+
+		os_info.old_tablespaces[tblnum] = pg_strdup(
 									 PQgetvalue(res, tblnum, i_spclocation));
+
+		/*
+		 * Check that the tablespace path exists and is a directory.
+		 * Effectively, this is checking only for tables/indexes in
+		 * non-existent tablespace directories.  Databases located in
+		 * non-existent tablespaces already throw a backend error.
+		 * Non-existent tablespace directories can occur when a data
+		 * directory that contains user tablespaces is moved as part
+		 * of pg_upgrade preparation and the symbolic links are not
+		 * updated.
+		 */
+		if (stat(os_info.old_tablespaces[tblnum], &statBuf) != 0)
+		{
+			if (errno == ENOENT)
+				report_status(PG_FATAL,
+							  "tablespace directory \"%s\" does not exist\n",
+							  os_info.old_tablespaces[tblnum]);
+			else
+				report_status(PG_FATAL,
+							  "cannot stat() tablespace directory \"%s\": %s\n",
+							  os_info.old_tablespaces[tblnum], getErrorText(errno));
+		}
+		if (!S_ISDIR(statBuf.st_mode))
+				report_status(PG_FATAL,
+							  "tablespace path \"%s\" is not a directory\n",
+							  os_info.old_tablespaces[tblnum]);
+	}
 
 	PQclear(res);
 
@@ -81,16 +113,15 @@ get_tablespace_paths(migratorContext *ctx)
 
 
 static void
-set_tablespace_directory_suffix(migratorContext *ctx, Cluster whichCluster)
+set_tablespace_directory_suffix(ClusterInfo *cluster)
 {
-	ClusterInfo *cluster = (whichCluster == CLUSTER_OLD) ? &ctx->old : &ctx->new;
-
 	if (GET_MAJOR_VERSION(cluster->major_version) <= 804)
-		cluster->tablespace_suffix = pg_strdup(ctx, "");
+		cluster->tablespace_suffix = pg_strdup("");
 	else
 	{
 		/* This cluster has a version-specific subdirectory */
-		cluster->tablespace_suffix = pg_malloc(ctx, 4 + strlen(cluster->major_version_str) +
+		cluster->tablespace_suffix = pg_malloc(4 +
+										 strlen(cluster->major_version_str) +
 											   10 /* OIDCHARS */ + 1);
 
 		/* The leading slash is needed to start a new directory. */
