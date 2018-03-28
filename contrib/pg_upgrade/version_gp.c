@@ -13,24 +13,22 @@
  * old_GPDB4_check_for_money_data_type_usage()
  *	8.2 -> 8.3
  *	Money data type was widened from 32 to 64 bits. It's incompatible, and we
- *	have no support for converting it.
+ *	have no support for converting it. This function is hardcoded to work on
+ *	the old_cluster since it's never relevant to run on the new_cluster.
  */
 void
-old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichCluster)
+old_GPDB4_check_for_money_data_type_usage(void)
 {
-	ClusterInfo *active_cluster = (whichCluster == CLUSTER_OLD) ?
-	&ctx->old : &ctx->new;
 	int			dbnum;
 	FILE	   *script = NULL;
 	bool		found = false;
 	char		output_path[MAXPGPATH];
 
-	prep_status(ctx, "Checking for invalid 'money' user columns");
+	prep_status("Checking for invalid 'money' user columns");
 
-	snprintf(output_path, sizeof(output_path), "%s/tables_using_money.txt",
-			 ctx->cwd);
+	snprintf(output_path, sizeof(output_path), "tables_using_money.txt");
 
-	for (dbnum = 0; dbnum < active_cluster->dbarr.ndbs; dbnum++)
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
 	{
 		PGresult   *res;
 		bool		db_used = false;
@@ -39,10 +37,10 @@ old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichClu
 		int			i_nspname,
 					i_relname,
 					i_attname;
-		DbInfo	   *active_db = &active_cluster->dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(ctx, active_db->db_name, whichCluster);
+		DbInfo	   *active_db = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&old_cluster, active_db->db_name);
 
-		res = executeQueryOrDie(ctx, conn,
+		res = executeQueryOrDie(conn,
 								"SELECT n.nspname, c.relname, a.attname "
 								"FROM	pg_catalog.pg_class c, "
 								"		pg_catalog.pg_namespace n, "
@@ -65,7 +63,7 @@ old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichClu
 		{
 			found = true;
 			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
-				pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n", output_path);
+				pg_log(PG_FATAL, "Could not create necessary file:  %s\n", output_path);
 			if (!db_used)
 			{
 				fprintf(script, "Database:  %s\n", active_db->db_name);
@@ -85,8 +83,8 @@ old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichClu
 	if (found)
 	{
 		fclose(script);
-		pg_log(ctx, PG_REPORT, "fatal\n");
-		pg_log(ctx, PG_FATAL,
+		pg_log(PG_REPORT, "fatal\n");
+		pg_log(PG_FATAL,
 			   "| Your installation contains the \"money\" data type in\n"
 			   "| user tables.  This data type changed its internal\n"
 			   "| format between your old and new clusters so this\n"
@@ -96,7 +94,7 @@ old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichClu
 			   "| \t%s\n\n", output_path);
 	}
 	else
-		check_ok(ctx);
+		check_ok();
 }
 
 /*
@@ -108,21 +106,18 @@ old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichClu
  *	all 127 segfiles.
  */
 void
-old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster)
+old_GPDB4_check_no_free_aoseg(void)
 {
 	int			dbnum;
 	char		output_path[MAXPGPATH];
 	bool		found = false;
 	FILE	   *logfile = NULL;
-	ClusterInfo *active_cluster = (whichCluster == CLUSTER_OLD) ?
-		&ctx->old : &ctx->new;
 
-	prep_status(ctx, "Checking for AO tables with no free segfiles");
+	prep_status("Checking for AO tables with no free segfiles");
 
-	snprintf(output_path, sizeof(output_path), "%s/tables_no_free_aosegs.txt",
-			 ctx->cwd);
+	snprintf(output_path, sizeof(output_path), "tables_no_free_aosegs.txt");
 
-	for (dbnum = 0; dbnum < active_cluster->dbarr.ndbs; dbnum++)
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
 	{
 		PGresult   *res;
 		bool		db_used = false;
@@ -131,10 +126,10 @@ old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster)
 		int			i_nspname,
 					i_relname,
 					i_attname;
-		DbInfo	   *active_db = &active_cluster->dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(ctx, active_db->db_name, whichCluster);
+		DbInfo	   *active_db = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&old_cluster, active_db->db_name);
 
-		res = executeQueryOrDie(ctx, conn,
+		res = executeQueryOrDie(conn,
 								"SELECT n.nspname, c.relname, a.attname "
 								"FROM	pg_catalog.pg_class c, "
 								"		pg_catalog.pg_namespace n, "
@@ -164,7 +159,7 @@ old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster)
 		if (ntups > 0)
 		{
 			if (logfile == NULL && (logfile = fopen(output_path, "w")) == NULL)
-				pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n", output_path);
+				pg_log(PG_FATAL, "Could not create necessary file:  %s\n", output_path);
 			found = true;
 			for (rowno = 0; rowno < ntups; rowno++)
 			{
@@ -188,8 +183,8 @@ old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster)
 	{
 		if (logfile)
 			fclose(logfile);
-		pg_log(ctx, PG_REPORT, "warning\n");
-		pg_log(ctx, PG_WARNING,
+		pg_log(PG_REPORT, "warning\n");
+		pg_log(PG_WARNING,
 			   "| Your installation contains the \"numeric\" data type in\n"
 			   "| one or more AO tables without free segments.  In order to\n"
 			   "| rewrite the table(s), please recreate them using a CREATE\n"
@@ -198,7 +193,7 @@ old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster)
 			   "| \t%s\n\n", output_path);
 	}
 	else
-		check_ok(ctx);
+		check_ok();
 }
 
 /*
@@ -210,20 +205,18 @@ old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster)
  *	them anyway.
  */
 void
-check_hash_partition_usage(migratorContext *ctx)
+check_hash_partition_usage(void)
 {
-	ClusterInfo	   *old_cluster = &ctx->old;
 	int				dbnum;
 	FILE		   *script = NULL;
 	bool			found = false;
 	char			output_path[MAXPGPATH];
 
-	prep_status(ctx, "Checking for hash partitioned tables");
+	prep_status("Checking for hash partitioned tables");
 
-	snprintf(output_path, sizeof(output_path), "%s/hash_partitioned_tables.txt",
-			 ctx->cwd);
+	snprintf(output_path, sizeof(output_path), "hash_partitioned_tables.txt");
 
-	for (dbnum = 0; dbnum < old_cluster->dbarr.ndbs; dbnum++)
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
 	{
 		PGresult   *res;
 		bool		db_used = false;
@@ -231,10 +224,10 @@ check_hash_partition_usage(migratorContext *ctx)
 		int			rowno;
 		int			i_nspname,
 					i_relname;
-		DbInfo	   *active_db = &old_cluster->dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(ctx, active_db->db_name, CLUSTER_OLD);
+		DbInfo	   *active_db = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&old_cluster, active_db->db_name);
 
-		res = executeQueryOrDie(ctx, conn,
+		res = executeQueryOrDie(conn,
 								"SELECT n.nspname, c.relname "
 								"FROM pg_catalog.pg_partition p, pg_catalog.pg_class c, pg_catalog.pg_namespace n "
 								"WHERE p.parrelid = c.oid AND c.relnamespace = n.oid "
@@ -247,7 +240,7 @@ check_hash_partition_usage(migratorContext *ctx)
 		{
 			found = true;
 			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
-				pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n", output_path);
+				pg_log(PG_FATAL, "Could not create necessary file:  %s\n", output_path);
 			if (!db_used)
 			{
 				fprintf(script, "Database:  %s\n", active_db->db_name);
@@ -266,8 +259,8 @@ check_hash_partition_usage(migratorContext *ctx)
 	if (found)
 	{
 		fclose(script);
-		pg_log(ctx, PG_REPORT, "fatal\n");
-		pg_log(ctx, PG_FATAL,
+		pg_log(PG_REPORT, "fatal\n");
+		pg_log(PG_FATAL,
 			   "| Your installation contains hash partitioned tables.\n"
 			   "| Upgrading hash partitioned tables is not supported,\n"
 			   "| so this cluster cannot currently be upgraded.  You\n"
@@ -277,7 +270,7 @@ check_hash_partition_usage(migratorContext *ctx)
 			   "| \t%s\n\n", output_path);
 	}
 	else
-		check_ok(ctx);
+		check_ok();
 }
 
 /*
@@ -289,42 +282,39 @@ check_hash_partition_usage(migratorContext *ctx)
  * mark all indexes as invalid.
  */
 void
-new_gpdb5_0_invalidate_indexes(migratorContext *ctx, bool check_mode,
-							   Cluster whichCluster)
+new_gpdb5_0_invalidate_indexes(void)
 {
 	int			dbnum;
 
-	prep_status(ctx, "Invalidating indexes in new cluster");
+	prep_status("Invalidating indexes in new cluster");
 
-	for (dbnum = 0; dbnum < ctx->old.dbarr.ndbs; dbnum++)
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
 	{
-		DbInfo	   *olddb = &ctx->old.dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(ctx, olddb->db_name, CLUSTER_NEW);
-		char		query[QUERY_ALLOC];
+		DbInfo	   *olddb = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&new_cluster, olddb->db_name);
 
 		/*
 		 * GPDB doesn't allow hacking the catalogs without setting
 		 * allow_system_table_mods first.
 		 */
-		PQclear(executeQueryOrDie(ctx, conn,
-								  "set allow_system_table_mods='dml'"));
+		PQclear(executeQueryOrDie(conn, "set allow_system_table_mods='dml'"));
 
 		/*
 		 * check_mode doesn't do much interesting for this but at least
 		 * we'll know we are allowed to change allow_system_table_mods
 		 * which is required
 		 */
-		if (!check_mode)
+		if (!user_opts.check)
 		{
-			snprintf(query, sizeof(query),
-					 "UPDATE pg_index SET indisvalid = false WHERE indexrelid >= %u",
-					 FirstNormalObjectId);
-			PQclear(executeQueryOrDie(ctx, conn, query));
+			PQclear(executeQueryOrDie(conn,
+									  "UPDATE pg_index SET indisvalid = false "
+									  "WHERE indexrelid >= %u",
+									  FirstNormalObjectId));
 		}
 		PQfinish(conn);
 	}
 
-	check_ok(ctx);
+	check_ok();
 }
 
 /*
@@ -334,40 +324,42 @@ new_gpdb5_0_invalidate_indexes(migratorContext *ctx, bool check_mode,
  * Hence, mark all bitmap indexes as invalid.
  */
 void
-new_gpdb_invalidate_bitmap_indexes(migratorContext *ctx, bool check_mode,
-								   Cluster whichCluster)
+new_gpdb_invalidate_bitmap_indexes(void)
 {
 	int			dbnum;
 
-	prep_status(ctx, "Invalidating bitmap indexes in new cluster");
+	prep_status("Invalidating bitmap indexes in new cluster");
 
-	for (dbnum = 0; dbnum < ctx->old.dbarr.ndbs; dbnum++)
+	for (dbnum = 0; dbnum < new_cluster.dbarr.ndbs; dbnum++)
 	{
-		DbInfo	   *olddb = &ctx->old.dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(ctx, olddb->db_name, CLUSTER_NEW);
+		DbInfo	   *olddb = &new_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&new_cluster, olddb->db_name);
 
 		/*
 		 * GPDB doesn't allow hacking the catalogs without setting
 		 * allow_system_table_mods first.
 		 */
-		PQclear(executeQueryOrDie(ctx, conn,
-								  "set allow_system_table_mods='dml'"));
+		PQclear(executeQueryOrDie(conn, "set allow_system_table_mods='dml'"));
 
 		/*
-		 * check_mode doesn't do much interesting for this but at least
+		 * check mode doesn't do much interesting for this but at least
 		 * we'll know we are allowed to change allow_system_table_mods
 		 * which is required.
 		 */
-		if (!check_mode)
+		if (!user_opts.check)
 		{
-			PQclear(executeQueryOrDie(ctx, conn,
-									  "UPDATE pg_index SET indisvalid = false FROM pg_class c WHERE c.oid = indexrelid AND indexrelid >= %u AND relam = 3013;",
+			PQclear(executeQueryOrDie(conn,
+									  "UPDATE pg_index SET indisvalid = false "
+									  "  FROM pg_class c "
+									  " WHERE c.oid = indexrelid AND "
+									  "       indexrelid >= %u AND "
+									  "       relam = 3013;",
 									  FirstNormalObjectId));
 		}
 		PQfinish(conn);
 	}
 
-	check_ok(ctx);
+	check_ok();
 }
 
 /*
@@ -378,9 +370,8 @@ new_gpdb_invalidate_bitmap_indexes(migratorContext *ctx, bool check_mode,
  * these types.
  */
 Oid *
-get_numeric_types(migratorContext *ctx, PGconn *conn)
+get_numeric_types(PGconn *conn)
 {
-	char		query[QUERY_ALLOC];
 	PGresult   *res;
 	Oid		   *result;
 	int			result_count = 0;
@@ -394,7 +385,7 @@ get_numeric_types(migratorContext *ctx, PGconn *conn)
 	 * array we still waste very little memory in the grand scheme of things
 	 * so keep it simple and leave it be with an overflow check instead.
 	 */
-	result = pg_malloc(ctx, sizeof(Oid) * NUMERIC_ALLOC);
+	result = pg_malloc(sizeof(Oid) * NUMERIC_ALLOC);
 	memset(result, InvalidOid, NUMERIC_ALLOC);
 
 	result[result_count++] = 1700;		/* 1700 == NUMERICOID */
@@ -409,14 +400,12 @@ get_numeric_types(migratorContext *ctx, PGconn *conn)
 	 */
 	while (iterator < result_count && result[iterator] != InvalidOid)
 	{
-		snprintf(query, sizeof(query),
+		res = executeQueryOrDie(conn,
 				 "SELECT typ.oid AS typoid, base.oid AS baseoid "
 				 "FROM pg_type base "
-				 "  JOIN pg_type typ ON base.oid = typ.typbasetype "
+				 "     JOIN pg_type typ ON base.oid = typ.typbasetype "
 				 "WHERE base.typbasetype = '%u'::pg_catalog.oid;",
 				 result[iterator++]);
-
-		res = executeQueryOrDie(ctx, conn, query);
 
 		if (PQntuples(res) > 0)
 		{
@@ -427,7 +416,7 @@ get_numeric_types(migratorContext *ctx, PGconn *conn)
 		PQclear(res);
 
 		if (result_count == NUMERIC_ALLOC - 1)
-			pg_log(ctx, PG_FATAL, "Too many NUMERIC types found");
+			pg_log(PG_FATAL, "Too many NUMERIC types found");
 	}
 
 	return result;

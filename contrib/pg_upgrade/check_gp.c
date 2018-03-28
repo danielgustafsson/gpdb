@@ -15,9 +15,9 @@
 
 #include "pg_upgrade.h"
 
-static void check_external_partition(migratorContext *ctx);
-static void check_covering_aoindex(migratorContext *ctx);
-static void check_partition_indexes(migratorContext *ctx);
+static void check_external_partition();
+static void check_covering_aoindex();
+static void check_partition_indexes();
 
 /*
  *	check_greenplum
@@ -28,23 +28,11 @@ static void check_partition_indexes(migratorContext *ctx);
  *	matter.
  */
 void
-check_greenplum(migratorContext *ctx)
+check_greenplum(void)
 {
-	/*
-	 * Upgrading within a major version is a handy feature of pg_upgrade, but
-	 * we don't allow it for within 4.3.x clusters, 4.3.x can only be an old
-	 * version to be upgraded from.
-	 */
-	if (GET_MAJOR_VERSION(ctx->old.major_version) <= 802 &&
-		GET_MAJOR_VERSION(ctx->new.major_version) <= 802)
-	{
-		pg_log(ctx, PG_FATAL,
-			   "old and new cluster cannot both be Greenplum 4.3.x installations\n");
-	}
-
-	check_external_partition(ctx);
-	check_covering_aoindex(ctx);
-	check_partition_indexes(ctx);
+	check_external_partition();
+	check_covering_aoindex();
+	check_partition_indexes();
 }
 
 /*
@@ -62,40 +50,36 @@ check_greenplum(migratorContext *ctx)
  *	found.
  */
 static void
-check_external_partition(migratorContext *ctx)
+check_external_partition(void)
 {
-	ClusterInfo *old_cluster = &ctx->old;
-	char		query[QUERY_ALLOC];
 	char		output_path[MAXPGPATH];
 	FILE	   *script = NULL;
 	bool		found = false;
 	int			dbnum;
 
-	prep_status(ctx, "Checking for external tables used in partitioning");
+	prep_status("Checking for external tables used in partitioning");
 
-	snprintf(output_path, sizeof(output_path), "%s/external_partitions.txt",
-			 ctx->cwd);
+	snprintf(output_path, sizeof(output_path), "external_partitions.txt");
 	/*
 	 * We need to query the inheritance catalog rather than the partitioning
 	 * catalogs since they are not available on the segments.
 	 */
-	snprintf(query, sizeof(query),
+
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		PGresult   *res;
+		int			ntups;
+		int			rowno;
+		DbInfo	   *active_db = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn;
+
+		conn = connectToServer(&old_cluster, active_db->db_name);
+		res = executeQueryOrDie(conn,
 			 "SELECT cc.relname, c.relname AS partname, c.relnamespace "
 			 "FROM   pg_inherits i "
 			 "       JOIN pg_class c ON (i.inhrelid = c.oid AND c.relstorage = '%c') "
 			 "       JOIN pg_class cc ON (i.inhparent = cc.oid);",
 			 RELSTORAGE_EXTERNAL);
-
-	for (dbnum = 0; dbnum < old_cluster->dbarr.ndbs; dbnum++)
-	{
-		PGresult   *res;
-		int			ntups;
-		int			rowno;
-		DbInfo	   *active_db = &old_cluster->dbarr.dbs[dbnum];
-		PGconn	   *conn;
-
-		conn = connectToServer(ctx, active_db->db_name, CLUSTER_OLD);
-		res = executeQueryOrDie(ctx, conn, query);
 
 		ntups = PQntuples(res);
 
@@ -104,7 +88,7 @@ check_external_partition(migratorContext *ctx)
 			found = true;
 
 			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
-				pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n",
+				pg_log(PG_FATAL, "Could not create necessary file:  %s\n",
 					   output_path);
 
 			for (rowno = 0; rowno < ntups; rowno++)
@@ -121,8 +105,8 @@ check_external_partition(migratorContext *ctx)
 	if (found)
 	{
 		fclose(script);
-		pg_log(ctx, PG_REPORT, "fatal\n");
-		pg_log(ctx, PG_FATAL,
+		pg_log(PG_REPORT, "fatal\n");
+		pg_log(PG_FATAL,
 			   "| Your installation contains partitioned tables with external\n"
 			   "| tables as partitions.  These partitions need to be removed\n"
 			   "| from the partition hierarchy before the upgrade.  A list of\n"
@@ -130,9 +114,7 @@ check_external_partition(migratorContext *ctx)
 			   "| \t%s\n\n", output_path);
 	}
 	else
-	{
-		check_ok(ctx);
-	}
+		check_ok();
 }
 
 /*
@@ -175,21 +157,27 @@ check_external_partition(migratorContext *ctx)
  *	cluster which exhibits this.
  */
 static void
-check_covering_aoindex(migratorContext *ctx)
+check_covering_aoindex(void)
 {
-	ClusterInfo	   *old_cluster = &ctx->old;
-	char			query[QUERY_ALLOC];
 	char			output_path[MAXPGPATH];
 	FILE		   *script = NULL;
 	bool			found = false;
 	int				dbnum;
 
-	prep_status(ctx, "Checking for non-covering indexes on partitioned AO tables");
+	prep_status("Checking for non-covering indexes on partitioned AO tables");
 
-	snprintf(output_path, sizeof(output_path), "%s/mismatched_aopartition_indexes.txt",
-			 ctx->cwd);
+	snprintf(output_path, sizeof(output_path), "mismatched_aopartition_indexes.txt");
 
-	snprintf(query, sizeof(query),
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		PGresult   *res;
+		PGconn	   *conn;
+		int			ntups;
+		int			rowno;
+		DbInfo	   *active_db = &old_cluster.dbarr.dbs[dbnum];
+
+		conn = connectToServer(&old_cluster, active_db->db_name);
+		res = executeQueryOrDie(conn,
 			 "SELECT DISTINCT ao.relid, inh.inhrelid "
 			 "FROM   pg_catalog.pg_appendonly ao "
 			 "       JOIN pg_catalog.pg_inherits inh "
@@ -200,17 +188,6 @@ check_covering_aoindex(migratorContext *ctx)
 			 "         ON (i.indrelid = ao.relid) "
 			 "WHERE  ao.blkdirrelid <> 0;");
 
-	for (dbnum = 0; dbnum < old_cluster->dbarr.ndbs; dbnum++)
-	{
-		PGresult   *res;
-		PGconn	   *conn;
-		int			ntups;
-		int			rowno;
-		DbInfo	   *active_db = &old_cluster->dbarr.dbs[dbnum];
-
-		conn = connectToServer(ctx, active_db->db_name, CLUSTER_OLD);
-		res = executeQueryOrDie(ctx, conn, query);
-
 		ntups = PQntuples(res);
 
 		if (ntups > 0)
@@ -218,7 +195,7 @@ check_covering_aoindex(migratorContext *ctx)
 			found = true;
 
 			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
-				pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n",
+				pg_log(PG_FATAL, "Could not create necessary file:  %s\n",
 					   output_path);
 
 			for (rowno = 0; rowno < ntups; rowno++)
@@ -236,8 +213,8 @@ check_covering_aoindex(migratorContext *ctx)
 	if (found)
 	{
 		fclose(script);
-		pg_log(ctx, PG_REPORT, "fatal\n");
-		pg_log(ctx, PG_FATAL,
+		pg_log(PG_REPORT, "fatal\n");
+		pg_log(PG_FATAL,
 			   "| Your installation contains partitioned append-only tables\n"
 			   "| with an index defined on the partition parent which isn't\n"
 			   "| present on all partition members.  These indexes must be\n"
@@ -247,9 +224,7 @@ check_covering_aoindex(migratorContext *ctx)
 
 	}
 	else
-	{
-		check_ok(ctx);
-	}
+		check_ok();
 }
 
 /*
@@ -262,20 +237,18 @@ check_covering_aoindex(migratorContext *ctx)
  *	handling them for the end-user.
  */
 static void
-check_partition_indexes(migratorContext *ctx)
+check_partition_indexes(void)
 {
-	ClusterInfo	   *old_cluster = &ctx->old;
 	int				dbnum;
 	FILE		   *script = NULL;
 	bool			found = false;
 	char			output_path[MAXPGPATH];
 
-	prep_status(ctx, "Checking for indexes on partitioned tables");
+	prep_status("Checking for indexes on partitioned tables");
 
-	snprintf(output_path, sizeof(output_path), "%s/partitioned_tables_indexes.txt",
-			 ctx->cwd);
+	snprintf(output_path, sizeof(output_path), "partitioned_tables_indexes.txt");
 
-	for (dbnum = 0; dbnum < old_cluster->dbarr.ndbs; dbnum++)
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
 	{
 		PGresult   *res;
 		bool		db_used = false;
@@ -284,10 +257,10 @@ check_partition_indexes(migratorContext *ctx)
 		int			i_nspname;
 		int			i_relname;
 		int			i_indexes;
-		DbInfo	   *active_db = &old_cluster->dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(ctx, active_db->db_name, CLUSTER_OLD);
+		DbInfo	   *active_db = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&old_cluster, active_db->db_name);
 
-		res = executeQueryOrDie(ctx, conn,
+		res = executeQueryOrDie(conn,
 								"WITH partitions AS ("
 								"    SELECT DISTINCT n.nspname, "
 								"           c.relname "
@@ -318,7 +291,7 @@ check_partition_indexes(migratorContext *ctx)
 		{
 			found = true;
 			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
-				pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n", output_path);
+				pg_log(PG_FATAL, "Could not create necessary file:  %s\n", output_path);
 			if (!db_used)
 			{
 				fprintf(script, "Database:  %s\n", active_db->db_name);
@@ -337,8 +310,8 @@ check_partition_indexes(migratorContext *ctx)
 	if (found)
 	{
 		fclose(script);
-		pg_log(ctx, PG_REPORT, "fatal\n");
-		pg_log(ctx, PG_FATAL,
+		pg_log(PG_REPORT, "fatal\n");
+		pg_log(PG_FATAL,
 			   "| Your installation contains partitioned tables with\n"
 			   "| indexes defined on them.  Indexes on partition parents,\n"
 			   "| as well as children, must be dropped before upgrade.\n"
@@ -346,5 +319,5 @@ check_partition_indexes(migratorContext *ctx)
 			   "| \t%s\n\n", output_path);
 	}
 	else
-		check_ok(ctx);
+		check_ok();
 }

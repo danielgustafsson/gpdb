@@ -68,14 +68,14 @@ epoch_us(void)
 }
 
 void
-report_progress(migratorContext *ctx, Cluster cluster, progress_type op, char *fmt,...)
+report_progress(ClusterInfo *cluster, progress_type op, char *fmt,...)
 {
 	va_list			args;
 	char			message[MAX_STRING];
 	char			filename[MAXPGPATH];
 	unsigned long	ts;
 
-	if (!ctx->progress)
+	if (!user_opts.progress)
 		return;
 
 	ts = epoch_us();
@@ -86,15 +86,14 @@ report_progress(migratorContext *ctx, Cluster cluster, progress_type op, char *f
 
 	if (!progress_file)
 	{
-		snprintf(filename, sizeof(filename), "%s/%d.inprogress",
-				 ctx->cwd, ++progress_id);
+		snprintf(filename, sizeof(filename), "%d.inprogress", ++progress_id);
 		if ((progress_file = fopen(filename, "w")) == NULL)
-			pg_log(ctx, PG_FATAL, "Could not create progress file:  %s\n",
+			pg_log(PG_FATAL, "Could not create progress file:  %s\n",
 				   filename);
 	}
 
 	fprintf(progress_file, "%lu;%s;%s;%s;\n",
-			epoch_us(), CLUSTERNAME(cluster), opname(op), message);
+			epoch_us(), CLUSTER_NAME(cluster), opname(op), message);
 	progress_counter++;
 
 	/*
@@ -104,20 +103,20 @@ report_progress(migratorContext *ctx, Cluster cluster, progress_type op, char *f
 	 * to the user.
 	 */
 	if ((progress_counter > OP_PER_PROGRESS) && (ts > progress_prev + TS_PER_PROGRESS))
-		close_progress(ctx);
+		close_progress();
 }
 
 void
-close_progress(migratorContext *ctx)
+close_progress(void)
 {
 	char	old[MAXPGPATH];
 	char	new[MAXPGPATH];
 
-	if (!ctx->progress || !progress_file)
+	if (!user_opts.progress || !progress_file)
 		return;
 
-	snprintf(old, sizeof(old), "%s/%d.inprogress", ctx->cwd, progress_id);
-	snprintf(new, sizeof(new), "%s/%d.done", ctx->cwd, progress_id);
+	snprintf(old, sizeof(old), "%d.inprogress", progress_id);
+	snprintf(new, sizeof(new), "%d.done", progress_id);
 
 	fclose(progress_file);
 	progress_file = NULL;
