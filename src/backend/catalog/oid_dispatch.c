@@ -648,6 +648,9 @@ GetPreassignedOidForTuple(Relation catalogrel, HeapTuple tuple)
 				missing_ok = true;
 			}
 		}
+	
+		if (IsBinaryUpgrade && strcmp(searchkey.objname, "info_rels") == 0)
+			missing_ok = true;
 
 		if (!missing_ok)
 			elog(ERROR, "no pre-assigned OID for %s tuple \"%s\" (namespace:%u keyOid1:%u keyOid2:%u)",
@@ -690,6 +693,9 @@ GetPreassignedOidForRelation(Oid namespaceOid, const char *relname)
 	searchkey.catalog = RelationRelationId;
 	searchkey.namespaceOid = namespaceOid;
 	searchkey.objname = (char *) relname;
+
+	if (IsBinaryUpgrade && strcmp(relname, "info_rels") == 0)
+		return InvalidOid;
 
 	if ((oid = GetPreassignedOid(&searchkey)) == InvalidOid)
 	{
