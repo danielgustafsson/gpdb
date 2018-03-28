@@ -52,7 +52,7 @@
  * into memory, and inject it to the pg_dump output, just after the \connect
  * line.
  *
- *	Copyright (c) 2017, Pivotal Software Inc
+ *	Copyright (c) 2017-Present, Pivotal Software Inc
  */
 
 #include "pg_upgrade.h"
@@ -357,5 +357,39 @@ dump_rows(migratorContext *ctx, PQExpBuffer buf, FILE *file, PGconn *conn,
 
 	if (file != NULL)
 		destroyPQExpBuffer(buf);
+}
+
+char *
+get_preassigned_oids_for_db(migratorContext *ctx, char *line)
+{
+	char	   *dbname;
+	int			dbnum;
+
+	/*
+	 * FIXME: parsing the dump like this is madness. We should use a dump file
+	 * for each database to begin with. (like more recent version of
+	 * PostgreSQL).
+	 */
+	if (strncmp(line, "\\connect ", strlen("\\connect ")) != 0)
+		return NULL;
+
+	dbname = line + strlen("\\connect ");
+
+	/* strip newline */
+	if (strlen(dbname) <= 1)
+		return NULL;
+	dbname[strlen(dbname) - 1] = '\0';
+
+	for (dbnum = 0; dbnum < ctx->old.dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *olddb = &ctx->old.dbarr.dbs[dbnum];
+
+		if (strcmp(olddb->db_name, dbname) == 0)
+		{
+			/* Found it! */
+			return olddb->reserved_oids;
+		}
+	}
+	return NULL;
 }
 

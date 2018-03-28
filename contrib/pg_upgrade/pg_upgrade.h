@@ -80,7 +80,7 @@
 #define atooid(x)  ((Oid) strtoul((x), NULL, 10))
 
 /* OID system catalog preservation added during PG 9.0 development */
-#define TABLE_SPACE_SUBDIRS_CAT_VER 201001111
+#define TABLE_SPACE_SUBDIRS 201001111
 /* postmaster/postgres -b (binary_upgrade) flag added during PG 9.1 development */
 /* In GPDB, it was introduced during GPDB 5.0 development. */
 #define BINARY_UPGRADE_SERVER_FLAG_CAT_VER 301607301
@@ -460,9 +460,6 @@ const char *linkAndUpdateFile(migratorContext *ctx,
 				pageCnvCtx *pageConverter, const char *src, const char *dst);
 
 void		check_hard_link(migratorContext *ctx);
-void rewriteHeapPageChecksum(migratorContext *ctx,
-					 const char *fromfile, const char *tofile,
-					 const char *schemaName, const char *relName);
 
 /* function.c */
 
@@ -493,15 +490,6 @@ void		parseCommandLine(migratorContext *ctx, int argc, char *argv[]);
 void		get_pg_database_relfilenode(migratorContext *ctx, Cluster whichCluster);
 const char *transfer_all_new_dbs(migratorContext *ctx, DbInfoArr *olddb_arr,
 				   DbInfoArr *newdb_arr, char *old_pgdata, char *new_pgdata);
-
-/* aotable.c */
-void		restore_aosegment_tables(migratorContext *ctx);
-
-/* gpdb4_heap_convert.c */
-const char *convert_gpdb4_heap_file(migratorContext *ctx,
-									const char *src, const char *dst,
-									bool has_numerics, AttInfo *atts, int natts);
-void		finish_gpdb4_page_converter(migratorContext *ctx);
 
 /* tablespace.c */
 
@@ -540,18 +528,12 @@ void	   *pg_malloc(migratorContext *ctx, int size);
 void		pg_free(void *ptr);
 const char *getErrorText(int errNum);
 unsigned int str2uint(const char *str);
-void 		report_progress(migratorContext *ctx, Cluster cluster, progress_type op, char *fmt,...);
-void		close_progress(migratorContext *ctx);
 
 
 /* version.c */
 
 void new_9_0_populate_pg_largeobject_metadata(migratorContext *ctx,
 									  bool check_mode, Cluster whichCluster);
-void new_gpdb5_0_invalidate_indexes(migratorContext *ctx, bool check_mode,
-									Cluster whichCluster);
-void new_gpdb_invalidate_bitmap_indexes(migratorContext *ctx, bool check_mode,
-										Cluster whichCluster);
 
 /* version_old_8_3.c */
 
@@ -570,15 +552,6 @@ void old_8_3_invalidate_bpchar_pattern_ops_indexes(migratorContext *ctx,
 char *old_8_3_create_sequence_script(migratorContext *ctx,
 							   Cluster whichCluster);
 
-/* version_old_gpdb4.c */
-void old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichCluster);
-void old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster);
-
-/* oid_dump.c */
-void dump_new_oids(migratorContext *ctx);
-void get_old_oids(migratorContext *ctx);
-void slurp_oid_files(migratorContext *ctx);
-
 /*
  * Hack to make backend macros that check for assertions to work.
  */
@@ -590,3 +563,48 @@ void slurp_oid_files(migratorContext *ctx);
 #undef Assert
 #endif
 #define Assert(condition) ((void) (true || (condition)))
+
+/* aotable.c */
+
+void		restore_aosegment_tables(migratorContext *ctx);
+
+/* gpdb4_heap_convert.c */
+
+const char *convert_gpdb4_heap_file(migratorContext *ctx,
+									const char *src, const char *dst,
+									bool has_numerics, AttInfo *atts, int natts);
+void		finish_gpdb4_page_converter(migratorContext *ctx);
+
+/* file_gp.c */
+
+void copy_distributedlog(migratorContext *ctx);
+void rewriteHeapPageChecksum(migratorContext *ctx,
+					 const char *fromfile, const char *tofile,
+					 const char *schemaName, const char *relName);
+
+/* version_old_gpdb4.c */
+
+void old_GPDB4_check_for_money_data_type_usage(migratorContext *ctx, Cluster whichCluster);
+void old_GPDB4_check_no_free_aoseg(migratorContext *ctx, Cluster whichCluster);
+void check_hash_partition_usage(migratorContext *ctx);
+void new_gpdb5_0_invalidate_indexes(migratorContext *ctx, bool check_mode,
+									Cluster whichCluster);
+void new_gpdb_invalidate_bitmap_indexes(migratorContext *ctx, bool check_mode,
+										Cluster whichCluster);
+Oid *get_numeric_types(migratorContext *ctx, PGconn *conn);
+
+/* oid_dump.c */
+
+void dump_new_oids(migratorContext *ctx);
+void get_old_oids(migratorContext *ctx);
+void slurp_oid_files(migratorContext *ctx);
+char *get_preassigned_oids_for_db(migratorContext *ctx, char *line);
+
+/* check_gp.c */
+
+void check_greenplum(migratorContext *ctx);
+
+/* reporting.c */
+
+void report_progress(migratorContext *ctx, Cluster cluster, progress_type op, char *fmt,...);
+void close_progress(migratorContext *ctx);
