@@ -840,7 +840,7 @@ set_frozenxids(bool minmxid_only)
 			 * The logic here should keep consistent with function
 			 * should_have_valid_relfrozenxid().
 			 */
-									  "WHERE	(relkind IN ('r', 'm', 't')",
+									  "WHERE	(relkind IN ('r', 'm', 't')"
 									  "AND relstorage NOT IN ('x', 'f', 'v', 'a', 'c')) "
 									  "OR (relkind IN ('t', 'o', 'b', 'm'))",
 									  old_cluster.controldata.chkpnt_nxtxid));
