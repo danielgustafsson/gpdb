@@ -396,7 +396,7 @@ FaultInjector_InjectFaultNameIfSet(
 			 * filling up disks during tests and also saves time.
 			 */
 #if defined(HAVE_GETRLIMIT) && defined(RLIMIT_CORE)
-			;struct rlimit lim;
+			struct rlimit lim;
 			getrlimit(RLIMIT_CORE, &lim);
 			lim.rlim_cur = 0;
 			if (setrlimit(RLIMIT_CORE, &lim) != 0)

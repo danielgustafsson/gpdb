@@ -42,7 +42,7 @@ AppendOnlyVisimapEntry_Finish(
 
 /*
  * Inits the visimap entry data structure.
- ;
+ *
  * Assumes a zero-allocated visimap entry data structure.
  *
  * Until appendonly_visimap_copyout or appendonly_visimap_clear is called,
