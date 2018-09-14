@@ -577,7 +577,63 @@ cdbpath_match_preds_to_both_partkeys(PlannerInfo *root,
 				PathKey    *pathkey = (PathKey *) outersublist;
 
 				if (pathkey->pk_eclass != rinfo->left_ec && pathkey->pk_eclass != rinfo->right_ec)
-					continue;
+				{
+					/*
+					 * If the EquivalenceClass in the Pathkey and RestrictInfo
+					 * don't match, we might still be able to perform an equi-
+					 * join in case the clause is an explicit cast which is
+					 * coercible. An example is when the distribution is on a
+					 * varchar column which in the join in cast to numeric.
+					 * The pathkey ec will for TEXT due to the implicit cast by
+					 * the parser, but the rinfo ec will be for NUMERIC.
+					 */
+					if (IsA(rinfo->clause, OpExpr))
+					{
+						if (list_length(((OpExpr *) rinfo->clause)->args) == 2)
+						{
+							bool		found = false;
+							ListCell   *lc;
+							Oid			ltype;
+							Oid			rtype;
+
+							ltype = exprType(list_nth(((OpExpr *) rinfo->clause)->args, 0));
+							rtype = exprType(list_nth(((OpExpr *) rinfo->clause)->args, 1));
+
+							/*
+							 * Ensure that the left and right types are equal.
+							 */
+							if (ltype != rtype)
+								continue;
+
+							/*
+							 * See of the OpExpr node contains a coercible cast
+							 * which we can use.
+							 */
+							foreach(lc, ((OpExpr *) rinfo->clause)->args)
+							{
+								Node *expr = (Node *) lfirst(lc);
+
+								if (IsA(expr, CoerceViaIO))
+								{
+									if (((CoerceViaIO *) expr)->coerceformat == COERCE_EXPLICIT_CAST)
+										found = true;
+								}
+								if (IsA(expr, RelabelType))
+								{
+									if (((RelabelType *) expr)->relabelformat == COERCE_IMPLICIT_CAST)
+										found = true;
+								}
+							}
+
+							if (found)
+								break;
+							else
+								continue;
+						}
+					}
+					else
+						continue;
+				}
 			}
 			else
 			{
