@@ -148,6 +148,7 @@ static char curl_Error_Buffer[CURL_ERROR_SIZE];
 
 static void gp_proto0_write_done(URL_CURL_FILE *file);
 static void extract_http_domain(char* i_path, char* o_domain, int dlen);
+static char * make_url(const char *url, bool is_ipv6);
 
 /* we use a global one for convenience */
 static CURLM *multi_handle = 0;
@@ -859,12 +860,10 @@ local_strstr(const char *str1, const char *str2)
  * For this case calling getDnsAddress method inside make_url, will serve the
  * purpose of IP validation.  But when parameter - url will contain a domain
  * name, then the domain name substring will be changed to a numerical ip
- * address in the buf output parameter.
- *
- * Returns the length of the converted URL string, excluding null-terminator.
+ * address in the output.
  */
-static int
-make_url(const char *url, char *buf, bool is_ipv6)
+static char *
+make_url(const char *url, bool is_ipv6)
 {
 	char *authority_start = local_strstr(url, "//");
 	char *authority_end;
@@ -873,10 +872,9 @@ make_url(const char *url, char *buf, bool is_ipv6)
 	char hostname[HOST_NAME_SIZE];
 	char *hostip = NULL;
 	char portstr[9];
-	int len;
-	char *p;
 	int port = 80; /* default for http */
 	bool  domain_resolved_to_ipv6 = false;
+	StringInfoData buf;
 
 	if (!authority_start)
 		elog(ERROR, "illegal url '%s'", url);
@@ -968,41 +966,17 @@ make_url(const char *url, char *buf, bool is_ipv6)
 	if (strchr(hostip, ':') != NULL && !is_ipv6)
 		domain_resolved_to_ipv6 = true;
 
-	if (!buf)
-	{
-		int len = strlen(url) - strlen(hostname) + strlen(hostip);
-		if (domain_resolved_to_ipv6)
-			len += 2; /* for the square brackets */
-		return len;
-	}
+	initStringInfo(&buf);
 
-	p = buf;
-	len = hostname_start - url;
-	strncpy(p, url, len);
-	p += len;
-	url += len;
-
-	len = strlen(hostname);
-	url += len;
-
-	len = strlen(hostip);
+	appendStringInfoString(&buf, hostname);
 	if (domain_resolved_to_ipv6)
-	{
-		*p = '[';
-		p++;
-	}
-	strncpy(p, hostip, len);
-	p += len;
+		appendStringInfoChar(&buf, '[');
+	appendStringInfoString(&buf, hostip);
 	if (domain_resolved_to_ipv6)
-	{
-		*p = ']';
-		p++;
-	}
+		appendStringInfoChar(&buf, ']');
+	appendStringInfoString(&buf, url);
 
-	strcpy(p, url);
-	p += strlen(url);
-
-	return p - buf;
+	return buf.data;
 }
 
 /*
@@ -1053,10 +1027,10 @@ URL_FILE *
 url_curl_fopen(char *url, bool forwrite, extvar_t *ev, CopyState pstate)
 {
 	URL_CURL_FILE *file;
-	int			sz;
 	int         ip_mode;
 	int 		e;
 	bool		is_ipv6 = url_has_ipv6_format(url);
+	char	   *tmp;
 
 	/* Reset curl_Error_Buffer */
 	curl_Error_Buffer[0] = '\0';
@@ -1069,9 +1043,8 @@ url_curl_fopen(char *url, bool forwrite, extvar_t *ev, CopyState pstate)
 		url_curl_resowner_callback_registered = true;
 	}
 
-	sz = make_url(url, NULL, is_ipv6);
-	if (sz < 0)
-		elog(ERROR, "illegal URL: %s", url);
+	tmp = make_url(url, is_ipv6);
+	Assert(strlen(tmp) > 0);
 
 	file = (URL_CURL_FILE *) palloc0(sizeof(URL_CURL_FILE));
 	file->common.type = CFTYPE_CURL;
@@ -1079,19 +1052,15 @@ url_curl_fopen(char *url, bool forwrite, extvar_t *ev, CopyState pstate)
 	file->for_write = forwrite;
 	file->curl = create_curlhandle();
 
+	/*
+	 * We need to call is_url_ipv6 for the case where inside make_url
+	 * function a domain name was transformed to an IPv6 address.
+	 */
+	if (!is_ipv6)
+		is_ipv6 = url_has_ipv6_format(tmp);
+
 	if (!IS_GPFDISTS_URI(url))
-	{
-		file->curl_url = (char *) palloc0(sz + 1);
-
-		make_url(file->common.url, file->curl_url, is_ipv6);
-
-		/*
-		 * We need to call is_url_ipv6 for the case where inside make_url function
-		 * a domain name was transformed to an IPv6 address.
-		 */
-		if ( !is_ipv6 )
-			is_ipv6 = url_has_ipv6_format(file->curl_url);
-	}
+		file->curl_url = tmp;
 	else
 	{
 		/*
@@ -1101,18 +1070,10 @@ url_curl_fopen(char *url, bool forwrite, extvar_t *ev, CopyState pstate)
 		 * not resolve the hostname in this case. I have decided
 		 * to not resolve it anyway and let libcurl do the work.
 		 */
-		char* tmp_resolved;
-
 		file->curl_url = pstrdup(file->common.url);
-
-		tmp_resolved = palloc0(sz + 1);
-		make_url(file->common.url, tmp_resolved, is_ipv6);
-			
-		/* keep the same ipv6 logic here */
-		if ( !is_ipv6 )
-			is_ipv6 = url_has_ipv6_format(tmp_resolved);
+		pfree(tmp);
 	}
-		
+
 	if (IS_GPFDIST_URI(file->curl_url) || IS_GPFDISTS_URI(file->curl_url))
 	{
 		/* replace gpfdist:// with http:// or gpfdists:// with https://
