@@ -958,7 +958,7 @@ make_url(const char *url, bool is_ipv6)
 				 errmsg("hostname cannot be resolved '%s'", url)));
 
 	/*
-	 * test for the case where the URL originaly contained a domain name
+	 * test for the case where the URL originally contained a domain name
 	 * (so is_ipv6 was set to false) but the DNS resolution in getDnsAddress
 	 * returned an IPv6 address so know we also have to put the square
 	 * brackets [..] in the URL string.
@@ -968,13 +968,14 @@ make_url(const char *url, bool is_ipv6)
 
 	initStringInfo(&buf);
 
-	appendStringInfoString(&buf, hostname);
+	for (int i = 0; i < (hostname_start - url); i++)
+		appendStringInfoChar(&buf, *(url + i));
 	if (domain_resolved_to_ipv6)
 		appendStringInfoChar(&buf, '[');
 	appendStringInfoString(&buf, hostip);
 	if (domain_resolved_to_ipv6)
 		appendStringInfoChar(&buf, ']');
-	appendStringInfoString(&buf, url);
+	appendStringInfoString(&buf, url + (strlen(hostname) + (hostname_start - url)));
 
 	return buf.data;
 }
@@ -991,7 +992,7 @@ extract_http_domain(char *i_path, char *o_domain, int dlen)
 	char* p_st = (char*)local_strstr(i_path, "//");
 	p_st = p_st + 2;
 	char* p_en = strchr(p_st, '/');
-	
+
 	domsz = p_en - p_st;
 	cpsz = ( domsz < dlen ) ? domsz : dlen;
 	memcpy(o_domain, p_st, cpsz);
@@ -1002,7 +1003,7 @@ url_has_ipv6_format (char *url)
 {
 	bool is6 = false;
 	char *ipv6 = local_strstr(url, "://[");
-	
+
 	if ( ipv6 )
 		ipv6 = strchr(ipv6, ']');
 	if ( ipv6 )
@@ -1035,7 +1036,7 @@ url_curl_fopen(char *url, bool forwrite, extvar_t *ev, CopyState pstate)
 	/* Reset curl_Error_Buffer */
 	curl_Error_Buffer[0] = '\0';
 
-	Assert (IS_HTTP_URI(url) || IS_GPFDIST_URI(url) || IS_GPFDISTS_URI(url));
+	Assert(IS_HTTP_URI(url) || IS_GPFDIST_URI(url) || IS_GPFDISTS_URI(url));
 
 	if (!url_curl_resowner_callback_registered)
 	{
@@ -1104,7 +1105,7 @@ url_curl_fopen(char *url, bool forwrite, extvar_t *ev, CopyState pstate)
 	/* 'file' is the application variable that gets passed to write_callback */
 	CURL_EASY_SETOPT(file->curl->handle, CURLOPT_WRITEDATA, file);
 
-	if ( !is_ipv6 )
+	if (!is_ipv6)
 		ip_mode = CURL_IPRESOLVE_V4;
 	else
 		ip_mode = CURL_IPRESOLVE_V6;
@@ -1646,7 +1647,7 @@ gp_proto0_write(URL_CURL_FILE *file, CopyState pstate)
 
 	if (nbytes == 0)
 		return;
-	
+
 	/* post binary data */
 	CURL_EASY_SETOPT(file->curl->handle, CURLOPT_POSTFIELDS, buf);
 
