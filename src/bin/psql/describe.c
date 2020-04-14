@@ -50,6 +50,7 @@ static bool isGPDB(void);
 static bool isGPDB4200OrLater(void);
 static bool isGPDB5000OrLater(void);
 static bool isGPDB6000OrLater(void);
+static bool isGPDB7000OrLater(void);
 
 static bool isGPDB(void)
 {
@@ -161,8 +162,18 @@ isGPDB6000OrLater(void)
 	if (!isGPDB())
 		return false;		/* Not Greenplum at all. */
 
-	/* GPDB 6 is based on PostgreSQL 8.4 */
+	/* GPDB 6 consists of PostgreSQL 8.4-9.4 */
 	return pset.sversion >= 80400;
+}
+
+static bool
+isGPDB7000OrLater(void)
+{
+	if (!isGPDB())
+		return false;
+
+	/* GPDB 7 consists of PostgreSQL 9.5- */
+	return pset.sversion >= 90500;
 }
 
 /*----------------
@@ -3065,6 +3076,7 @@ add_external_table_footer(printTableContent *const cont, const char *oid)
 	PGresult   *result = NULL;
 	bool	    gpdb5OrLater = isGPDB5000OrLater();
 	bool	    gpdb6OrLater = isGPDB6000OrLater();
+	bool		gpdb7OrLater = isGPDB7000OrLater();
 	char	   *optionsName = gpdb5OrLater ? ", x.options " : "";
 	char	   *execLocations = gpdb5OrLater ? "x.urilocation, x.execlocation" : "x.location";
 	char	   *urislocation;
@@ -3085,7 +3097,21 @@ add_external_table_footer(printTableContent *const cont, const char *oid)
 	initPQExpBuffer(&buf);
 	initPQExpBuffer(&tmpbuf);
 
-	if (gpdb6OrLater)
+	if (gpdb7OrLater)
+	{
+		printfPQExpBuffer(&buf,
+						  "SELECT x.fmttype, x.command, x.logerrors, "
+						  "x.rejectlimit, x.rejectlimittype, x.writable, "
+						  "pg_catalog.pg_encoding_to_char(x.encoding), "
+						  "f.ftoptions "
+						  "%s"
+						  "FROM pg_catalog.pg_class c "
+						  "JOIN pg_catalog.pg_foreign_table f ON (c.oid = f.ftrelid) "
+						  "JOIN pg_catalog.pg_exttable x ON (f.ftrelid = x.reloid) "
+						  "WHERE c.oid = '%s'\n",
+						  execLocations, oid);
+	}
+	else if (gpdb6OrLater)
 	{
 		printfPQExpBuffer(&buf,
 						  "SELECT %s, x.fmttype, x.fmtopts, x.command, x.logerrors, "
@@ -3116,7 +3142,20 @@ add_external_table_footer(printTableContent *const cont, const char *oid)
 	if (PQntuples(result) != 1)
 		goto error_return;
 
-	if (gpdb6OrLater)
+	if (gpdb7OrLater)
+	{
+		urislocation = PQgetvalue(result, 0, 0);
+		execlocation = PQgetvalue(result, 0, 1);
+		fmttype = PQgetvalue(result, 0, 2);
+		command = PQgetvalue(result, 0, 3);
+		logerrors = PQgetvalue(result, 0, 4);
+		rejlim =  PQgetvalue(result, 0, 5);
+		rejlimtype = PQgetvalue(result, 0, 6);
+		writable = PQgetvalue(result, 0, 7);
+		extencoding = PQgetvalue(result, 0, 8);
+		options = PQgetvalue(result, 0, 9);
+	}
+	else if (gpdb6OrLater)
 	{
 		urislocation = PQgetvalue(result, 0, 0);
 		execlocation = PQgetvalue(result, 0, 1);

@@ -19,6 +19,7 @@
 
 #include "catalog/pg_exttable.h"
 #include "catalog/pg_extprotocol.h"
+#include "catalog/pg_foreign_table.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_proc.h"
 #include "commands/defrem.h"
@@ -79,21 +80,15 @@ ValidateExtTableOptions(List *options)
  * ExtractErrorLogPersistent - load LOG ERRORS PERSISTENTLY from optons.
  */
 bool
-ExtractErrorLogPersistent(List **options)
+ExtractErrorLogPersistent(List *options)
 {
 	ListCell   *cell;
-	ListCell *prev = NULL;
 
-	foreach(cell, *options)
+	foreach(cell, options)
 	{
 		DefElem    *def = (DefElem *) lfirst(cell);
 		if (strcmp(def->defname, "error_log_persistent") == 0)
-		{
-			*options = list_delete_cell(*options, cell, prev);
-			/* these accept only boolean values */
 			return defGetBoolean(def);
-		}
-		prev = cell;
 	}
 	return false;
 }
@@ -116,8 +111,6 @@ InsertExtTableEntry(Oid 	tbloid,
 					int		rejectlimit,
 					char    logerrors,
 					int		encoding,
-					Datum	formatOptStr,
-					Datum   optionsStr,
 					Datum	locationExec,
 					Datum	locationUris)
 {
@@ -136,10 +129,8 @@ InsertExtTableEntry(Oid 	tbloid,
 
 	values[Anum_pg_exttable_reloid - 1] = ObjectIdGetDatum(tbloid);
 	values[Anum_pg_exttable_fmttype - 1] = CharGetDatum(formattype);
-	values[Anum_pg_exttable_fmtopts - 1] = formatOptStr;
-	values[Anum_pg_exttable_options - 1] = optionsStr;
 
-	if(commandString)
+	if (commandString)
 	{
 		/* EXECUTE type table - store command and command location */
 
@@ -192,7 +183,6 @@ InsertExtTableEntry(Oid 	tbloid,
 	/*
 	 * Add the dependency of custom external table
 	 */
-
 	if (locationUris != (Datum) 0)
 	{
 		Datum	   *elems;
@@ -201,7 +191,6 @@ InsertExtTableEntry(Oid 	tbloid,
 		deconstruct_array(DatumGetArrayTypeP(locationUris),
 						  TEXTOID, -1, false, 'i',
 						  &elems, NULL, &nelems);
-
 
 		for (int i = 0; i < nelems; i++)
 		{
@@ -229,7 +218,6 @@ InsertExtTableEntry(Oid 	tbloid,
 			if (referenced.objectId)
 				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 		}
-
 	}
 }
 
@@ -258,14 +246,17 @@ ExtTableEntry*
 GetExtTableEntryIfExists(Oid relid)
 {
 	Relation	pg_exttable_rel;
+	Relation	pg_foreign_table_rel;
 	ScanKeyData skey;
+	ScanKeyData ftkey;
 	SysScanDesc scan;
+	SysScanDesc ftscan;
 	HeapTuple	tuple;
+	HeapTuple	fttuple;
 	ExtTableEntry *extentry;
 	Datum		urilocations,
 				execlocations,
 				fmtcode,
-				fmtopts,
 				options,
 				command,
 				rejectlimit,
@@ -291,6 +282,28 @@ GetExtTableEntryIfExists(Oid relid)
 	{
 		systable_endscan(scan);
 		heap_close(pg_exttable_rel, RowExclusiveLock);
+		return NULL;
+	}
+
+	pg_foreign_table_rel = heap_open(ForeignTableRelationId, RowExclusiveLock);
+
+	ScanKeyInit(&ftkey,
+				Anum_pg_foreign_table_ftrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+
+	ftscan = systable_beginscan(pg_foreign_table_rel, ForeignTableRelidIndexId,
+								true, NULL, 1, &ftkey);
+	fttuple = systable_getnext(ftscan);
+
+	if (!HeapTupleIsValid(fttuple))
+	{
+		systable_endscan(scan);
+		heap_close(pg_exttable_rel, RowExclusiveLock);
+
+		systable_endscan(ftscan);
+		heap_close(pg_foreign_table_rel, RowExclusiveLock);
+
 		return NULL;
 	}
 
@@ -351,7 +364,6 @@ GetExtTableEntryIfExists(Oid relid)
 			/* append to a list of Value nodes, size nelems */
 			extentry->execlocations = lappend(extentry->execlocations, makeString(pstrdup(loc_str)));
 		}
-
 	}
 
 	/* get the execute command */
@@ -360,9 +372,9 @@ GetExtTableEntryIfExists(Oid relid)
 						   RelationGetDescr(pg_exttable_rel),
 						   &isNull);
 
-	if(isNull)
+	if (isNull)
 	{
-		if(locationNull)
+		if (locationNull)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 					 errmsg("invalid pg_exttable tuple, location and command are both NULL")));
@@ -382,34 +394,23 @@ GetExtTableEntryIfExists(Oid relid)
 
 	Insist(!isNull);
 	extentry->fmtcode = DatumGetChar(fmtcode);
-	Insist(extentry->fmtcode == 'c' || extentry->fmtcode == 't'
-		 || extentry->fmtcode == 'b' || extentry->fmtcode == 'a'
-		 || extentry->fmtcode == 'p');
+	Insist(fmttype_is_custom(extentry->fmtcode) ||
+		   fmttype_is_csv(extentry->fmtcode) ||
+		   fmttype_is_text(extentry->fmtcode));
 
-	/* get the format options string */
-	fmtopts = heap_getattr(tuple,
-						   Anum_pg_exttable_fmtopts,
-						   RelationGetDescr(pg_exttable_rel),
+	/*
+	 * External table options are stored in pg_foreign_table. This corresponds
+	 * to the previous pg_exttable attributes fmtopts and options.
+	 */
+	options = heap_getattr(fttuple,
+						   Anum_pg_foreign_table_ftoptions,
+						   RelationGetDescr(pg_foreign_table_rel),
 						   &isNull);
 
-	Insist(!isNull);
-	extentry->fmtopts = TextDatumGetCString(fmtopts);
-
-    /* get the external table options string */
-    options = heap_getattr(tuple,
-                           Anum_pg_exttable_options,
-                           RelationGetDescr(pg_exttable_rel),
-                           &isNull);
-
+	/* ftoptions array is always populated, {} if no options set */
 	if (isNull)
-	{
-		/* options array is always populated, {} if no options set */
 		elog(ERROR, "could not find options for external protocol");
-	}
-	else
-	{
-		extentry->options = untransformRelOptions(options);
-	}
+	extentry->options = untransformRelOptions(options);
 
 	/* get the reject limit */
 	rejectlimit = heap_getattr(tuple,
@@ -462,9 +463,11 @@ GetExtTableEntryIfExists(Oid relid)
 	extentry->iswritable = DatumGetBool(iswritable);
 
 
-	/* Finish up scan and close pg_exttable catalog. */
+	/* Finish up scan and close catalogs */
 	systable_endscan(scan);
 	heap_close(pg_exttable_rel, RowExclusiveLock);
+	systable_endscan(ftscan);
+	heap_close(pg_foreign_table_rel, RowExclusiveLock);
 
 	return extentry;
 }

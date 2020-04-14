@@ -36,15 +36,20 @@
 #include <fstream/gfile.h>
 #include <tcop/tcopprot.h>
 
-#include "funcapi.h"
 #include "access/fileam.h"
 #include "access/formatter.h"
 #include "access/heapam.h"
 #include "access/valid.h"
 #include "catalog/pg_exttable.h"
 #include "catalog/pg_proc.h"
+#include "cdb/cdbsreh.h"
+#include "cdb/cdbtm.h"
+#include "cdb/cdbutil.h"
+#include "cdb/cdbvars.h"
 #include "commands/copy.h"
 #include "commands/dbcommands.h"
+#include "commands/defrem.h"
+#include "funcapi.h"
 #include "libpq/libpq-be.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -59,18 +64,12 @@
 #include "utils/memutils.h"
 #include "utils/uri.h"
 
-#include "cdb/cdbsreh.h"
-#include "cdb/cdbtm.h"
-#include "cdb/cdbutil.h"
-#include "cdb/cdbvars.h"
-
 static HeapTuple externalgettup(FileScanDesc scan, ScanDirection dir);
 static void InitParseState(CopyState pstate, Relation relation,
 			   bool writable,
 			   char fmtType,
 			   char *uri, int rejectlimit,
-			   bool islimitinrows, char logerrors,
-			   List *options);
+			   bool islimitinrows, char logerrors);
 
 static void FunctionCallPrepareFormatter(FunctionCallInfoData *fcinfo,
 							 int nArgs,
@@ -89,8 +88,7 @@ static int	external_getdata_callback(void *outbuf, int datasize, void *extra);
 static int	external_getdata(URL_FILE *extfile, CopyState pstate, void *outbuf, int maxread);
 static void external_senddata(URL_FILE *extfile, CopyState pstate);
 static void external_scan_error_callback(void *arg);
-static void parseCustomFormatString(char *fmtstr, char **formatter_name, List **formatter_params);
-static Oid lookupCustomFormatter(char *formatter_name, bool iswritable);
+static Oid lookupCustomFormatter(List *options, bool iswritable);
 static void justifyDatabuf(StringInfo buf);
 
 static void base16_encode(char *raw, int len, char *encoded);
@@ -100,9 +98,9 @@ static void external_set_env_vars_ext(extvar_t *extvar, char *uri, bool csv, cha
 
 
 /* ----------------------------------------------------------------
-*				   external_ interface functions
-* ----------------------------------------------------------------
-*/
+ *				   external_ interface functions
+ * ----------------------------------------------------------------
+ */
 
 #ifdef FILEDEBUGALL
 #define FILEDEBUG_1 \
@@ -120,12 +118,12 @@ elog(DEBUG2, "external_getnext returning tuple")
 
 
 /* ----------------
-*		external_beginscan	- begin file scan
-* ----------------
-*/
+ *		external_beginscan	- begin file scan
+ * ----------------
+ */
 FileScanDesc
 external_beginscan(Relation relation, uint32 scancounter,
-				   List *uriList, char *fmtOptString, char fmtType, bool isMasterOnly,
+				   List *uriList, char fmtType, bool isMasterOnly,
 				   int rejLimit, bool rejLimitInRows, char logErrors, int encoding,
 				   List *extOptions)
 {
@@ -134,8 +132,6 @@ external_beginscan(Relation relation, uint32 scancounter,
 	int			attnum;
 	int			segindex = GpIdentity.segindex;
 	char	   *uri = NULL;
-	List	   *copyFmtOpts;
-	char	   *custom_formatter_name = NULL;
 	List	   *custom_formatter_params = NIL;
 
 	/*
@@ -268,19 +264,9 @@ external_beginscan(Relation relation, uint32 scancounter,
 		fmgr_info(scan->in_func_oid, &scan->in_functions[attnum - 1]);
 	}
 
-	/* Parse fmtOptString here */
-	if (fmttype_is_custom(fmtType))
-	{
-		copyFmtOpts = NIL;
-		parseCustomFormatString(fmtOptString,
-								&custom_formatter_name,
-								&custom_formatter_params);
-	}
-	else
-		copyFmtOpts = parseCopyFormatString(relation, fmtOptString, fmtType);
-
 	/* pass external table's encoding to copy's options */
-	copyFmtOpts = appendCopyEncodingOption(copyFmtOpts, encoding);
+	extOptions = list_copy(extOptions);
+	extOptions = appendCopyEncodingOption(extOptions, encoding);
 
 	/*
 	 * Allocate and init our structure that keeps track of data parsing state
@@ -289,11 +275,11 @@ external_beginscan(Relation relation, uint32 scancounter,
 									external_getdata_callback,
 									(void *) scan,
 									NIL,
-									copyFmtOpts);
+									extOptions);
 
 	/* Initialize all the parsing and state variables */
 	InitParseState(scan->fs_pstate, relation, false, fmtType,
-				   scan->fs_uri, rejLimit, rejLimitInRows, logErrors, extOptions);
+				   scan->fs_uri, rejLimit, rejLimitInRows, logErrors);
 
 	if (fmttype_is_custom(fmtType))
 	{
@@ -303,7 +289,7 @@ external_beginscan(Relation relation, uint32 scancounter,
 		Oid			procOid;
 
 		/* parseFormatString should have seen a formatter name */
-		procOid = lookupCustomFormatter(custom_formatter_name, false);
+		procOid = lookupCustomFormatter(extOptions, false);
 
 		/* we found our function. set it up for calling */
 		scan->fs_custom_formatter_func = palloc(sizeof(FmgrInfo));
@@ -313,7 +299,6 @@ external_beginscan(Relation relation, uint32 scancounter,
 		scan->fs_formatter = (FormatterData *) palloc0(sizeof(FormatterData));
 		initStringInfo(&scan->fs_formatter->fmt_databuf);
 		scan->fs_formatter->fmt_perrow_ctx = scan->fs_pstate->rowcontext;
-
 	}
 
 	/* pgstat_initstats(relation); */
@@ -545,8 +530,6 @@ external_insert_init(Relation rel)
 	ExternalInsertDesc extInsertDesc;
 	ExtTableEntry *extentry;
 	List	   *copyFmtOpts;
-	char	   *custom_formatter_name = NULL;
-	List	   *custom_formatter_params = NIL;
 
 	/*
 	 * Get the pg_exttable information for this table
@@ -610,18 +593,8 @@ external_insert_init(Relation rel)
 	 * sink.
 	 */
 
-	/* Parse fmtOptString here */
-	if (fmttype_is_custom(extentry->fmtcode))
-	{
-		copyFmtOpts = NIL;
-		parseCustomFormatString(extentry->fmtopts,
-								&custom_formatter_name,
-								&custom_formatter_params);
-	}
-	else
-		copyFmtOpts = parseCopyFormatString(rel, extentry->fmtopts, extentry->fmtcode);
-
 	/* pass external table's encoding to copy's options */
+	copyFmtOpts = list_copy(extentry->options);
 	copyFmtOpts = appendCopyEncodingOption(copyFmtOpts, extentry->encoding);
 
 	extInsertDesc->ext_pstate = BeginCopyToForExternalTable(rel, copyFmtOpts);
@@ -632,8 +605,7 @@ external_insert_init(Relation rel)
 				   extInsertDesc->ext_uri,
 				   extentry->rejectlimit,
 				   (extentry->rejectlimittype == 'r'),
-				   extentry->logerrors,
-				   extentry->options);
+				   extentry->logerrors);
 
 	if (fmttype_is_custom(extentry->fmtcode))
 	{
@@ -642,13 +614,12 @@ external_insert_init(Relation rel)
 		 */
 		Oid			procOid;
 
-		/* parseFormatString should have seen a formatter name */
-		procOid = lookupCustomFormatter(custom_formatter_name, true);
+		procOid = lookupCustomFormatter(extentry->options, true);
 
 		/* we found our function. set it up for calling  */
 		extInsertDesc->ext_custom_formatter_func = palloc(sizeof(FmgrInfo));
 		fmgr_info(procOid, extInsertDesc->ext_custom_formatter_func);
-		extInsertDesc->ext_custom_formatter_params = custom_formatter_params;
+		extInsertDesc->ext_custom_formatter_params = copyFmtOpts;
 
 		extInsertDesc->ext_formatter_data = (FormatterData *) palloc0(sizeof(FormatterData));
 		extInsertDesc->ext_formatter_data->fmt_perrow_ctx = extInsertDesc->ext_pstate->rowcontext;
@@ -1093,14 +1064,35 @@ externalgettup(FileScanDesc scan,
  * RET function: 0 args, returns record.
  */
 static Oid
-lookupCustomFormatter(char *formatter_name, bool iswritable)
+lookupCustomFormatter(List *options, bool iswritable)
 {
+	ListCell   *cell;
+	char	   *formatter_name;
 	List	   *funcname = NIL;
 	Oid			procOid = InvalidOid;
 	Oid			argList[1];
 	Oid			returnOid;
 
-	funcname = lappend(funcname, makeString(formatter_name));
+	/*
+	 * The formatter is defined as a "formatter=<name>" tuple in the options
+	 * array. Extract into a separate list in order to scan the catalog for
+	 * the function definition.
+	 */
+	foreach(cell, options)
+	{
+		DefElem *defel = (DefElem *) lfirst(cell);
+
+		if (strcmp(defel->defname, "formatter") == 0)
+		{
+			formatter_name = defGetString(defel);
+			funcname = list_make1(makeString(formatter_name));
+			break;
+		}
+	}
+	if (list_length(funcname) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("formatter function not found in table options")));
 
 	if (iswritable)
 	{
@@ -1151,8 +1143,7 @@ InitParseState(CopyState pstate, Relation relation,
 			   bool iswritable,
 			   char fmtType,
 			   char *uri, int rejectlimit,
-			   bool islimitinrows, char logerrors,
-			   List *options)
+			   bool islimitinrows, char logerrors)
 {
 	/*
 	 * Error handling setup
@@ -2062,79 +2053,6 @@ error:
 				 errmsg("external table internal parse error at end of line")));
 }
 
-static void
-parseCustomFormatString(char *fmtstr, char **formatter_name, List **formatter_params)
-{
-	char	   *token;
-	const char *whitespace = " \t\n\r";
-	char		nonstd_backslash = 0;
-	int			encoding = GetDatabaseEncoding();
-	List	   *l = NIL;
-	bool		formatter_found = false;
-
-	token = strtokx2(fmtstr, whitespace, NULL, NULL,
-					 0, false, true, encoding);
-
-	/* parse user custom options. take it as is. no validation needed */
-
-	if (token)
-	{
-		char	   *key = token;
-		char	   *val = NULL;
-		StringInfoData key_modified;
-
-		initStringInfo(&key_modified);
-
-		while (key)
-		{
-			/* MPP-14467 - replace meta chars back to original */
-			resetStringInfo(&key_modified);
-			appendStringInfoString(&key_modified, key);
-			replaceStringInfoString(&key_modified, "<gpx20>", " ");
-
-			val = strtokx2(NULL, whitespace, NULL, "'",
-						   nonstd_backslash, true, true, encoding);
-			if (val)
-			{
-
-				if (pg_strcasecmp(key, "formatter") == 0)
-				{
-					*formatter_name = pstrdup(val);
-					formatter_found = true;
-				}
-				else
-					l = lappend(l, makeDefElem(pstrdup(key_modified.data),
-									 (Node *) makeString(pstrdup(val))));
-			}
-			else
-				goto error;
-
-			key = strtokx2(NULL, whitespace, NULL, NULL,
-						   0, false, false, encoding);
-		}
-
-	}
-
-	if (!formatter_found)
-		ereport(ERROR,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("external table internal parse error: no formatter function name found")));
-
-	*formatter_params = l;
-
-	return;
-
-error:
-	if (token)
-		ereport(ERROR,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("external table internal parse error at \"%s\"",
-						token)));
-	else
-		ereport(ERROR,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("external table internal parse error at end of line")));
-}
 
 static char *
 get_eol_delimiter(List *params)

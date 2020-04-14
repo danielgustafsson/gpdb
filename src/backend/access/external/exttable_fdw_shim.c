@@ -132,9 +132,6 @@ make_externalscan_info(ExtTableEntry *extEntry)
 	/* assign Uris to segments. */
 	urilist = create_external_scan_uri_list(extEntry, &ismasteronly);
 
-	/* data format description */
-	Assert(extEntry->fmtopts);
-
 	/* single row error handling */
 	if (extEntry->rejectlimit != -1)
 	{
@@ -144,7 +141,6 @@ make_externalscan_info(ExtTableEntry *extEntry)
 	}
 
 	node->uriList = urilist;
-	node->fmtOptString = extEntry->fmtopts;
 	node->fmtType = extEntry->fmtcode;
 	node->isMasterOnly = ismasteronly;
 	node->rejLimit = rejectlimit;
@@ -305,7 +301,6 @@ exttable_BeginForeignScan(ForeignScanState *node,
 	currentScanDesc = external_beginscan(currentRelation,
 										 externalscan_info->scancounter,
 										 externalscan_info->uriList,
-										 externalscan_info->fmtOptString,
 										 externalscan_info->fmtType,
 										 externalscan_info->isMasterOnly,
 										 externalscan_info->rejLimit,

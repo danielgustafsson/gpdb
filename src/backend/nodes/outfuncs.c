@@ -701,7 +701,6 @@ _outExternalScanInfo(StringInfo str, const ExternalScanInfo *node)
 	WRITE_NODE_TYPE("EXTERNALSCANINFO");
 
 	WRITE_NODE_FIELD(uriList);
-	WRITE_STRING_FIELD(fmtOptString);
 	WRITE_CHAR_FIELD(fmtType);
 	WRITE_BOOL_FIELD(isMasterOnly);
 	WRITE_INT_FIELD(rejLimit);

@@ -42,9 +42,8 @@
 static Datum transformLocationUris(List *locs, bool isweb, bool iswritable);
 static Datum transformExecOnClause(List *on_clause);
 static char transformFormatType(char *formatname);
-static Datum transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswritable);
+static List * transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswritable);
 static void InvokeProtocolValidation(Oid procOid, char *procName, bool iswritable, List *locs);
-static Datum optionsListToArray(List *options);
 
 /* ----------------------------------------------------------------
 *		DefineExternalRelation
@@ -73,8 +72,7 @@ DefineExternalRelation(CreateExternalStmt *createExtStmt)
 	ObjectAddress objAddr;
 	Oid			userid;
 	Oid			reloid = 0;
-	Datum		formatOptStr;
-	Datum		optionsStr;
+	List	   *formatOpts;
 	Datum		locationUris = 0;
 	Datum		locationExec = 0;
 	char	   *commandString = NULL;
@@ -104,7 +102,6 @@ DefineExternalRelation(CreateExternalStmt *createExtStmt)
 	createStmt->tableElts = createExtStmt->tableElts;
 	createStmt->inhRelations = NIL;
 	createStmt->constraints = NIL;
-	createStmt->options = NIL;
 	createStmt->oncommit = ONCOMMIT_NOOP;
 	createStmt->tablespacename = NULL;
 	createStmt->distributedBy = createExtStmt->distributedBy; /* policy was set in transform */
@@ -266,7 +263,7 @@ DefineExternalRelation(CreateExternalStmt *createExtStmt)
 	 */
 	formattype = transformFormatType(createExtStmt->format);
 
-	formatOptStr = transformFormatOpts(formattype,
+	formatOpts = transformFormatOpts(formattype,
 									   createExtStmt->formatOpts,
 									   list_length(createExtStmt->tableElts),
 									   iswritable);
@@ -275,12 +272,9 @@ DefineExternalRelation(CreateExternalStmt *createExtStmt)
 	 * Parse and validate OPTION clause.
 	 */
 	ValidateExtTableOptions(createExtStmt->extOptions);
-	log_persistent_option = ExtractErrorLogPersistent(&createExtStmt->extOptions);
-	optionsStr = optionsListToArray(createExtStmt->extOptions);
-	if (DatumGetPointer(optionsStr) == NULL)
-	{
-		optionsStr = PointerGetDatum(construct_empty_array(TEXTOID));
-	}
+	formatOpts = list_concat(formatOpts, createExtStmt->extOptions);
+	log_persistent_option = ExtractErrorLogPersistent(createExtStmt->extOptions);
+
 	/*
 	 * Parse single row error handling info if available
 	 */
@@ -408,7 +402,7 @@ DefineExternalRelation(CreateExternalStmt *createExtStmt)
 		reloid = RangeVarGetRelid(createExtStmt->relation, NoLock, true);
 
 	createForeignTableStmt->servername = PG_EXTTABLE_SERVER_NAME;
-	createForeignTableStmt->options = NIL;
+	createForeignTableStmt->options = formatOpts;
 	CreateForeignTable(createForeignTableStmt, reloid,
 					   true /* skip permission checks, we checked them ourselves */);
 
@@ -421,8 +415,6 @@ DefineExternalRelation(CreateExternalStmt *createExtStmt)
 						rejectlimit,
 						logerrors,
 						encoding,
-						formatOptStr,
-						optionsStr,
 						locationExec,
 						locationUris);
 
@@ -715,51 +707,49 @@ transformFormatType(char *formatname)
 }
 
 /*
- * Transform the external table options into a text array format.
- *
- * The result is an array that includes the format string.
- *
- * This method is a backported FDW's function from upstream .
+ * Join the elements of the list separated by the specified delimiter and
+ * return as a string. There will be no whitespace added for prettyprinting,
+ * this is more intended for serializing. The caller is responsible for
+ * managing the returned memory.
  */
-static Datum
-optionsListToArray(List *options)
+static char *
+list_join(List *list, char delimiter)
 {
-	ArrayBuildState *astate = NULL;
-	ListCell   *option;
+	ListCell	   *cell;
+	StringInfoData	buf;
 
-	foreach(option, options)
+	if (list_length(list) == 0)
+		return pstrdup("");
+
+	initStringInfo(&buf);
+
+	foreach(cell, list)
 	{
-		DefElem    *defel = (DefElem *) lfirst(option);
-		char       *key = defel->defname;
-		char       *val = defGetString(defel);
-		char	   *s;
+		const char *cellval;
 
-		s = psprintf("%s=%s", key, val);
-		astate = accumArrayResult(astate,
-								  CStringGetTextDatum(s), false,
-				                  TEXTOID, CurrentMemoryContext);
+		cellval = strVal(lfirst(cell));
+		appendStringInfo(&buf, "%s%c", quote_identifier(cellval), delimiter);
 	}
 
-	if (astate)
-		return makeArrayResult(astate, CurrentMemoryContext);
+	/*
+	 * Rather than keeping track of when we're adding the last element, trim
+	 * the final delimiter to keep it simple.
+	 */
+	buf.data[buf.len - 1] = '\0';
 
-	return PointerGetDatum(NULL);
+	return buf.data;
 }
 
+
 /*
- * Transform the FORMAT options into a text field. Parse the
- * options and validate them for their respective format type.
- *
- * The result is a text field that includes the format string.
+ * Transform the FORMAT options List into a new List suitable for storing in
+ * pg_foreigntable.ftoptions.
  */
-static Datum
+static List *
 transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswritable)
 {
+	List 	   *cslist = NIL;
 	ListCell   *option;
-	Datum		result;
-	char	   *format_str;
-	char	   *formatter = NULL;
-	StringInfoData cfbuf;
 
 	CopyState cstate = palloc0(sizeof(CopyStateData));
 
@@ -787,11 +777,9 @@ transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswrita
 				/* ok */
 			}
 			else if (strcmp(defel->defname, "formatter") == 0)
-			{
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						 errmsg("formatter option only valid for custom formatters")));
-			}
 			else
 				elog(ERROR, "option \"%s\" not recognized",
 					 defel->defname);
@@ -801,8 +789,12 @@ transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswrita
 		if (fmttype_is_csv(formattype))
 		{
 			formatOpts = list_copy(formatOpts);
-			formatOpts = lappend(formatOpts, makeDefElem("format", (Node *)makeString("csv")));
+			formatOpts = lappend(formatOpts, makeDefElem("format", (Node *) makeString("csv")));
+
+			cslist = lappend(cslist, makeDefElem("format", (Node *) makeString("csv")));
 		}
+		else
+			cslist = lappend(cslist, makeDefElem("format", (Node *) makeString("text")));
 
 		/* verify all user supplied control char combinations are legal */
 		ProcessCopyOptions(cstate,
@@ -811,129 +803,58 @@ transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswrita
 						   numcols,
 						   false /* is_copy */);
 
-		/*
-		 * Build the format option string that will get stored in the catalog.
-		 *
-		 * NOTE: These are intentionally not escaped "correctly"! For
-		 * historical reasons, these options are stored in a weird format
-		 * that looks like they're SQL literals, but the escaping is
-		 * different. See comments in escape_fmtopts_string(), in
-		 * src/bin/pg_dump/dumputils.c.
-		 */
-		initStringInfo(&cfbuf);
-		appendStringInfo(&cfbuf, "delimiter '%s'", cstate->delim);
-		appendStringInfo(&cfbuf, " null '%s'", cstate->null_print);
-		appendStringInfo(&cfbuf, " escape '%s'", cstate->escape);
 		if (fmttype_is_csv(formattype))
-			appendStringInfo(&cfbuf, " quote '%s'", cstate->quote);
+			cslist = lappend(cslist, makeDefElem("quote", (Node *) makeString(cstate->quote)));
+		cslist = lappend(cslist, makeDefElem("delimiter", (Node *) makeString(cstate->delim)));
+		cslist = lappend(cslist, makeDefElem("null", (Node *) makeString(cstate->null_print)));
+		cslist = lappend(cslist, makeDefElem("escape", (Node *) makeString(cstate->escape)));
 		if (cstate->header_line)
-			appendStringInfo(&cfbuf, " header");
+			cslist = lappend(cslist, makeDefElem("header", (Node *) makeInteger(TRUE)));
 		if (cstate->fill_missing)
-			appendStringInfo(&cfbuf, " fill missing fields");
+			cslist = lappend(cslist, makeDefElem("fill_missing", (Node *) makeString("1")));
 
-		/*
-		 * re-construct the FORCE NOT NULL list string. TODO: is there no
-		 * existing util function that does this? can't find.
-		 */
+		/* Re-construct the FORCE NOT NULL list string */
 		if (cstate->force_notnull)
-		{
-			ListCell   *l;
-			bool		is_first_col = true;
+			cslist = lappend(cslist, makeDefElem("force_notnull", (Node *) makeString(list_join(cstate->force_notnull, ','))));
 
-			appendStringInfo(&cfbuf, " force not null");
-
-			foreach(l, cstate->force_notnull)
-			{
-				const char *col_name = strVal(lfirst(l));
-
-				appendStringInfo(&cfbuf, (is_first_col ? " %s" : ",%s"),
-								 quote_identifier(col_name));
-				is_first_col = false;
-			}
-		}
-
-		/*
-		 * re-construct the FORCE QUOTE list string.
-		 */
+		/* Re-construct the FORCE QUOTE list string */
 		if (cstate->force_quote)
-		{
-			ListCell   *l;
-			bool		is_first_col = true;
-
-			appendStringInfo(&cfbuf, " force quote");
-
-			foreach(l, cstate->force_quote)
-			{
-				const char *col_name = strVal(lfirst(l));
-
-				appendStringInfo(&cfbuf, (is_first_col ? " %s" : ",%s"),
-								 quote_identifier(col_name));
-				is_first_col = false;
-			}
-		}
-
-		if (cstate->force_quote_all)
-			appendStringInfo(&cfbuf, " force quote *");
+			cslist = lappend(cslist, makeDefElem("force_quote", (Node *) makeString(list_join(cstate->force_quote, ','))));
+		else if (cstate->force_quote_all)
+			cslist = lappend(cslist, makeDefElem("force_quote", (Node *) makeString("*")));
 
 		if (cstate->eol_str)
-			appendStringInfo(&cfbuf, " newline '%s'", cstate->eol_str);
-
-		format_str = cfbuf.data;
+			cslist = lappend(cslist, makeDefElem("newline", (Node *) makeString(cstate->eol_str)));
 	}
 	else
 	{
-		/* custom format */
-		StringInfoData cfbuf;
-
-		initStringInfo(&cfbuf);
+		bool		found = false;
 
 		foreach(option, formatOpts)
 		{
 			DefElem    *defel = (DefElem *) lfirst(option);
-			char	   *key = defel->defname;
-			char	   *val = defGetString(defel);
 
-			if (strcmp(key, "formatter") == 0)
+			if (strcmp(defel->defname, "formatter") == 0)
 			{
-				if (formatter)
+				if (found)
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("conflicting or redundant options")));
 
-				formatter = strVal(defel->arg);
+				found = true;
 			}
-
-			/*
-			 * Output "<key> '<val>' ", but replace any space chars in the key
-			 * with meta char (MPP-14467)
-			 */
-			while (*key)
-			{
-				if (*key == ' ')
-					appendStringInfoString(&cfbuf, "<gpx20>");
-				else
-					appendStringInfoChar(&cfbuf, *key);
-				key++;
-			}
-			appendStringInfo(&cfbuf, " '%s' ", val);
 		}
 
-		if (!formatter)
+		if (!found)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("no formatter function specified")));
 
-		format_str = cfbuf.data;
+		cslist = list_copy(formatOpts);
+		cslist = lappend(cslist, makeDefElem("format", (Node *) makeString("custom")));
 	}
 
-	/* convert c string to text datum */
-	result = CStringGetTextDatum(format_str);
-
-	/* clean up */
-	pfree(format_str);
-
-	return result;
-
+	return cslist;
 }
 
 static void

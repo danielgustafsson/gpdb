@@ -37,8 +37,6 @@ CATALOG(pg_exttable,6040) BKI_WITHOUT_OIDS
 	text	urilocation[1];		/* array of URI strings */
 	text	execlocation[1];	/* array of ON locations */
 	char	fmttype;			/* 't' (text) or 'c' (csv) */
-	text	fmtopts;			/* the data format options */
-	text	options[1];			/* the array of external table options */
 	text	command;			/* the command string to EXECUTE */
 	int32	rejectlimit;		/* error count reject limit per segment */
 	char	rejectlimittype;	/* 'r' (rows) or 'p' (percent) */
@@ -63,19 +61,17 @@ typedef FormData_pg_exttable *Form_pg_exttable;
  *		compiler constants for pg_exttable
  * ----------------
  */
-#define Natts_pg_exttable					12
+#define Natts_pg_exttable					10
 #define Anum_pg_exttable_reloid				1
 #define Anum_pg_exttable_urilocation			2
 #define Anum_pg_exttable_execlocation			3
 #define Anum_pg_exttable_fmttype			4
-#define Anum_pg_exttable_fmtopts			5
-#define Anum_pg_exttable_options			6
-#define Anum_pg_exttable_command			7
-#define Anum_pg_exttable_rejectlimit		8
-#define Anum_pg_exttable_rejectlimittype	9
-#define Anum_pg_exttable_logerrors			10
-#define Anum_pg_exttable_encoding			11
-#define Anum_pg_exttable_writable			12
+#define Anum_pg_exttable_command			5
+#define Anum_pg_exttable_rejectlimit		6
+#define Anum_pg_exttable_rejectlimittype	7
+#define Anum_pg_exttable_logerrors			8
+#define Anum_pg_exttable_encoding			9
+#define Anum_pg_exttable_writable			10
 
 
 /*
@@ -87,7 +83,6 @@ typedef struct ExtTableEntry
 	List*	urilocations;
 	List*	execlocations;
 	char	fmtcode;
-	char*	fmtopts;
 	List*	options;
 	char*	command;
 	int		rejectlimit;
@@ -102,7 +97,7 @@ typedef struct ExtTableEntry
 
 extern void ValidateExtTableOptions(List *options);
 
-extern bool ExtractErrorLogPersistent(List **options);
+extern bool ExtractErrorLogPersistent(List *options);
 
 extern void InsertExtTableEntry(Oid 	tbloid,
 					bool 	iswritable,
@@ -113,8 +108,6 @@ extern void InsertExtTableEntry(Oid 	tbloid,
 					int		rejectlimit,
 					char	logerrors,
 					int		encoding,
-					Datum	formatOptStr,
-					Datum	optionsStr,
 					Datum	locationExec,
 					Datum	locationUris);
 

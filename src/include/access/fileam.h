@@ -69,7 +69,7 @@ typedef enum DataLineStatus
 
 extern FileScanDesc external_beginscan(Relation relation,
 				   uint32 scancounter, List *uriList,
-				   char *fmtOptString, char fmtType, bool isMasterOnly,
+				   char fmtType, bool isMasterOnly,
 				   int rejLimit, bool rejLimitInRows,
 				   char logErrors, int encoding, List *extOptions);
 extern void external_rescan(FileScanDesc scan);

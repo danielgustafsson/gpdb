@@ -1484,7 +1484,6 @@ _readExternalScanInfo(void)
 	READ_LOCALS(ExternalScanInfo);
 
 	READ_NODE_FIELD(uriList);
-	READ_STRING_FIELD(fmtOptString);
 	READ_CHAR_FIELD(fmtType);
 	READ_BOOL_FIELD(isMasterOnly);
 	READ_INT_FIELD(rejLimit);
